@@ -1,6 +1,6 @@
 # The MiniRaw method
 
-October 11, 2026. This describes how MiniRaw works as implemented, why each part is designed as it is, and what the
+October 11, 2026; updated for format version 2 (D29, D30). This describes how MiniRaw works as implemented, why each part is designed as it is, and what the
 measurements say about it. The original design is [SPEC.md](../SPEC.md). Every place the implementation departs
 from it is numbered in [results/DEVIATIONS.md](../results/DEVIATIONS.md) (D1-D28), and those numbers are cited
 below.
@@ -41,8 +41,9 @@ flowchart LR
 
 | Layer | Contents | Tier |
 | --- | --- | --- |
-| L0 header | Sensor metadata, per-plane noise model, quantization tables (`lo`), technical statistics, section table | Hot; first read |
-| L1 base | k x k floor-mean of q: a small image used for preview and as a prediction input | Hot |
+| L0 header | Sensor metadata, per-plane noise model, quantization tables (`lo`), technical statistics, optional search embedding, section table | Hot; first read |
+| IDX (format 2) | A 512 px index thumbnail, JPEG XL, about 34 KB, right after the header | Hot |
+| L1 base (format 1) | k x k floor-mean of q: a small image used for preview and as a prediction input. Format 2 drops it. | Hot |
 | L2 signal | q for every pixel, in 512 x 512 tiles | Hot |
 | CTR | The original raw file's container, without sensor tiles and large previews (when supported) | Hot |
 | L3 noise | Exact position of each value inside its bin, per tile | Cold |
@@ -52,8 +53,8 @@ flowchart LR
 
 | Mode | Reads | Output |
 | --- | --- | --- |
-| `index` | L0 | Header: metadata, noise model, statistics |
-| `preview` | L0, L1 | A small developed image |
+| `index` | L0 | Header: metadata, noise model, statistics, embedding |
+| `preview` | L0 and IDX (format 2), or L0 and L1 (format 1) | A small image |
 | `signal` | L0, L1, L2 | Every sensor value to within the noise bound |
 | `exact` | L0 to L3 | Every sensor value bit for bit, verified against the stored SHA-256 |
 
@@ -186,7 +187,10 @@ Only `lo` is stored, delta-coded in the header. The decoder derives the rest wit
 no pixel leaves the bound at any step from 0.5 to 2.0.
 
 **Reconstruction choices.**
-- The default reconstruction is the spec's floor. For bins of even size it sits half a DN below the bin centre,
+- **Format 2 default, `csafe` (D30).** One stored bit per bin flags even-sized bins whose ceiling keeps every value
+  within the bound. Those bins alternate floor and ceiling on a pixel checkerboard; all others use the floor. Decile
+  bias falls about 40% with no bound violations.
+- The format 1 default is the spec's floor. For bins of even size it sits half a DN below the bin centre,
   which leaves a measurable bias on very low-noise sensors (D17).
 - A `checker` alternative alternates floor and ceiling on a pixel checkerboard. It halves the bias but can push
   about 0.001% of pixels past the bound, so it is optional and recorded in the header.
@@ -204,7 +208,10 @@ no pixel leaves the bound at any step from 0.5 to 2.0.
 A smaller step also makes the lossless total smaller: on the Sony A7 IV, step 0.5 brings it about 1% under JPEG XL
 lossless. But the hot tier grows by about a third. The default favours the hot tier.
 
-## 6. L1 base layer
+## 6. L1 base layer (format 1)
+
+**Format 2 drops L1** (D29): L2 is smaller without it, and `IDX` (section 9a) serves preview and search better.
+The rest of this section describes format 1, which v2 still reads and can write (`--format-version 1`).
 
 L1 is the integer floor-mean of q over k x k blocks (construction A). k is the largest power of two that keeps the
 plane's shorter side at least 128 px (D22; the spec said 256). L1 is coded whole with JPEG XL lossless.
@@ -279,7 +286,8 @@ A `.mraw` file is:
 | `tables` | Per-plane `lo`, delta-coded |
 | `layout` | Tile size, k, upsampler, packing, L1 construction, reconstruction rule, L2 prediction, optional L1 options |
 | `stats` | SNR at 18% grey, clipped share, mean and log-mean level, all relative to full scale (D28) |
-| `embed` | Reserved for a search embedding; not yet written |
+| `idx` | Format 2: the `IDX` thumbnail's codec and size |
+| `embed` | Format 2, optional: a list of int8 OpenCLIP embeddings of `IDX` (model, dim, dtype, scale, vector) |
 | `sections` | The section table |
 
 **Rules.**
@@ -296,6 +304,21 @@ A `.mraw` file is:
 expresses noise as SNR at 18% of full scale, which on 498 FiveK images tracks ISO with a pooled rank correlation of
 0.80 (the raw-DN slope: 0.48). It also records exposure as a log-mean level, which ranks night photos at an AUC of
 0.90.
+
+## 9a. Index thumbnail and embedding (format 2)
+
+- **`IDX`.** Each plane is box-averaged in linear light to about 1024 px. The reduced mosaic is developed by LibRaw at
+  half size (camera white balance, orientation applied), resized to 512 px on the long side and coded with JPEG XL
+  at distance 1.0: about 34 KB.
+- **Placement.** It sits immediately after the header, so a reader gets header and thumbnail in two short reads.
+- **Search quality.** On 493 fresh FiveK images:
+  - Its CLIP embedding has a median cosine of 0.980 with that of a full render.
+  - Neighbour overlap@10 is 0.84 (CLIP) and 0.86 (SigLIP), against 0.76 for the format 1 L1.
+  - Zero-shot classification stays within 1 point of the full render.
+- **Embedding.** `encode --embed` stores an int8 OpenCLIP embedding (512 bytes for ViT-B/32) computed from `IDX`.
+  - Indexing a file then reads only its 16 KB header.
+  - Re-indexing with a newer model reads header plus `IDX` (median 51 KB).
+  - A file can carry embeddings from several models.
 
 ## 10. Restoring the original raw file
 
@@ -320,6 +343,7 @@ a manifest records every file's hash so `unbundle` can verify and restore everyt
 | **Sony A7 IV, 10 files, tuning set** | Hot tier 11.7 MB (0.28x the 41.2 MB ARW, worst pixel 0.72σ). All layers 27.7 MB, 2% under JPEG XL lossless. File-exact 30.9 MB. | [README](../README.md) |
 | **FiveK holdout, 60 unseen images (40 linear, 14 cameras)** | Hot tier 0.41x the camera file. All layers 1.004x JPEG XL lossless (a tie). 60/60 exact. No pixel outside the bound at steps 0.5-2.0. | [fivek_benchmark.md](../results/fivek_benchmark.md) |
 | **Against a fixed square-root curve** (in-camera lossy raw style) | Equal size at equal average error; the curve is 12-40% larger at equal worst-case error | [fivek_benchmark.md](../results/fivek_benchmark.md) |
+| **Format 2 against format 1, 60 fresh images (paired)** | Hot tier -1.8%, lossless total -1.2% (0.987x JPEG XL), bias -38%, no bound violations, 60/60 exact | [v2_benchmark.md](../results/v2_benchmark.md) |
 | **Search index, 498 FiveK images and 9 native raws** | The default L1 misses the retrieval bar (0.76-0.77 against 0.80); at 256 px it reaches 0.89. Indexing reads a uniform 67-251 KB. | [index_benchmark.md](../results/index_benchmark.md) |
 | **Speed, A7 IV, Apple M1, 8 threads** | Encode 2.9 s (effort 7) or 1.4 s (effort 4); exact decode 0.66 s; signal decode 0.27 s; 1024 x 1024 region 53 ms | D23 |
 
@@ -356,10 +380,10 @@ and the commands to reproduce them are in `results/`.
   checker rule halves it at the cost of rare bound violations (D17).
 - **Stabilized RMSE on very dark frames** can exceed the spec's 0.32 (0.321 on one holdout image), because most bins
   there are only 1-3 DN wide.
-- **L1 is neither free nor a good enough index.** L2 doesn't use it profitably, and at the default size it misses
-  the retrieval bar. A lossy thumbnail section of 20-35 KB plus a stored embedding would serve search better at a
-  fraction of the cost, but gives up the non-redundant-index idea. A truly non-redundant base layer would need an L2
-  coder that conditions on L1, such as the spec's Phase 2 learned entropy model.
+- **The base layer is not the index.** Format 1's L1 was neither free nor good enough for search; format 2
+  replaces it with `IDX`. `IDX` still misses the plan's 0.90 neighbour-overlap bar (0.84-0.86), because of JPEG XL
+  compression at about 34 KB. A truly non-redundant base layer would need an L2 coder that conditions on it, such as
+  the spec's Phase 2 learned entropy model.
 - **Scope.**
   - Only 2 x 2 Bayer sensors.
   - Byte-exact restore only for lossless-JPEG-tiled raws.

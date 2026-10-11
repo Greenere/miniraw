@@ -110,15 +110,18 @@ def main():
     b2 = b2_jxl.encode_bytes(raw.planes, cfg["tile"], cfg["effort"], b2p)
     t_b2 = time.time() - t
     b1 = b1_native.raw_bytes(path)
-    hot = sz["L0"] + sz["L1"] + sz["L2"]
+    hot = sz["L0"] + sz["IDX"] + sz["L1"] + sz["L2"]           # IDX (format 2) is hot too
     print(fmt_row("source file (incl. previews, EXIF)", path.stat().st_size, npx, b2))
     print(fmt_row("source raw data only (B1)", b1, npx, b2))
     print(fmt_row("JPEG XL lossless planes (B2)", b2, npx, b2))
     print(fmt_row("MiniRaw L0 header", sz["L0"], npx, b2))
-    print(fmt_row("MiniRaw L1 base / preview", sz["L1"], npx, b2))
+    if sz["IDX"]:
+        print(fmt_row("MiniRaw IDX index thumbnail", sz["IDX"], npx, b2))
+    if sz["L1"]:
+        print(fmt_row("MiniRaw L1 base (format 1)", sz["L1"], npx, b2))
     print(fmt_row("MiniRaw L2 signal", sz["L2"], npx, b2))
     print(fmt_row("MiniRaw L3 noise (cold)", sz["L3"], npx, b2))
-    print(fmt_row(f"MiniRaw hot tier (L0-L2, step {step})", hot, npx, b2,
+    print(fmt_row(f"MiniRaw hot tier (step {step})", hot, npx, b2,
                   f"<- {1 - hot / path.stat().st_size:.0%} smaller than the source file"))
     print(fmt_row("MiniRaw total (bit-exact)", len(data), npx, b2))
 
@@ -149,7 +152,7 @@ def main():
         for st in cfg["steps"]:
             d, inf = codec.encode(raw, step=st, with_l3=False, models=models, **enc) if st != step else (data, info)
             s = container.layer_sizes(container.RangeReader(d).header)
-            hb = (len(d) - sum(s.values())) + s["L1"] + s["L2"] if st != step else hot
+            hb = (len(d) - sum(s.values())) + s["IDX"] + s["L1"] + s["L2"] if st != step else hot
             dd = codec.Decoder(container.RangeReader(d)).planes("signal")
             e = [metrics.stabilized_errors(raw.planes[p], dd[p], inf["planes"][p]["T"]) for p in range(4)]
             print(f"  step {st:3.1f}: {hb / 1e6:7.2f} MB  {8 * hb / npx:5.2f} bpp  {hb / b2:5.3f}x B2   "

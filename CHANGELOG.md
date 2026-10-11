@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Format version 2 (written by default; D29, D30).** v1 files decode bit-identically (checked against a file written by the v1.0.0 release); `encode --format-version 1` writes v1 files; readers reject newer versions. On the fresh `holdout2` split, against format 1 on the same images: hot tier -1.8%, lossless total -1.2% (0.987x JPEG XL lossless), with 0 pixels outside the bound and 60/60 exact decodes (`results/v2_benchmark.md`).
+  - **No L1.** L2 never benefited from it.
+  - **`IDX`:** a 512 px index thumbnail (JPEG XL, about 34 KB) right after the header. `decode --mode preview` writes it.
+  - **`encode --embed [MODEL]`** stores an int8 OpenCLIP embedding of `IDX` in the header (needs the `[index]` extra). Indexing a file then reads one 16 KB header.
+  - **`csafe` reconstruction:** a floor/ceiling checkerboard only in bins where the ceiling keeps the bound. Decile bias -38% with no bound violations.
+- `miniraw info` shows the format version, `IDX` and stored embeddings.
+- D24 (cross-plane prediction) and D25 (production-path efficiency) written up in `results/DEVIATIONS.md`.
+- Benchmark: `configs/v2.toml`, `bench.run --name`, fresh `holdout2` and `index500b` splits, `bench/experiments/v2_compare.py`, and the `IDX` arm in the index benchmark.
+- `.gitignore` ignores only the top-level `data/`, so `tests/data` fixtures are tracked.
 ## v1.0.0 (2026-10-11)
 
 The first stable release. **Format promise:** files written by v1.0.0 with default settings decode bit-identically

@@ -1,0 +1,281 @@
+# MiniRaw (v1.0 README, archived)
+
+> **Archived.** This is the README of MiniRaw v1.0.0 (file format version 1), kept for its Sony A7 IV results and charts. The current README is [../README.md](../README.md).
+
+A layered RAW codestream, v1.0 (Phase 1 of [SPEC.md](../SPEC.md); formerly "StrataRAW").
+
+| Layer | Contents |
+| --- | --- |
+| L0 header | Sensor metadata, per-plane noise model, quantisation tables (`lo`), section table |
+| L1 base | Low-resolution image in the noise-normalised domain (also the preview/index source) |
+| L2 signal | Full resolution, quantised to a fraction of local noise sigma, tiled JPEG XL lossless |
+| L3 noise | Exact remainder inside each quantisation bin, range-coded, tiled; can be stripped or split |
+
+Decode modes: `index` (L0), `preview` (L0+L1), `signal` (L0..L2, error bounded by the noise model),
+`exact` (L0..L3, bit-exact). `signal` and `exact` support region decode that reads only the touched tiles.
+
+## Results
+
+These are measured on 10 photos from a Sony A7 IV (33 MP, 14-bit, lossless-compressed ARW). Each figure is the
+median over the 10 files.
+
+- **Hot tier (L0-L2): 11.7 MB per photo, 72% smaller than the 41.2 MB ARW.** No pixel is off by more than 0.72x
+  the sensor's own noise at that brightness.
+- **Every layer together: 27.7 MB, sensor-exact** (every sensor value bit for bit). That is 33% smaller than the
+  ARW and 2% smaller than JPEG XL lossless (28.3 MB, also sensor-only), so keeping the exact data costs nothing
+  extra. The cold layer (L3) can be split off to cheaper storage.
+- **File-exact: 30.9 MB, 25% smaller than the ARW.** This restores the original ARW byte for byte. It adds the
+  ARW's container (0.18 MB, hot) and its embedded previews (3.0 MB, cold, losslessly repacked) to the sensor
+  data.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/size_dark.svg">
+  <img alt="Bar chart of median size per photo. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.7 MB (bit-exact); MiniRaw hot tier 11.7 MB at step 1.0 and 9.7 MB at step 1.5." src="img/size_light.svg">
+</picture>
+
+The step size trades hot-tier size against error. It also affects the lossless total: smaller steps shrink the
+full bit-exact file further, but make the hot tier larger (about 33% at `--step 0.5`). The default, 1.0, favours
+the hot tier.
+
+For a smaller file, the step trades size against error. In the chart below, error is in units of the sensor's own
+noise (sigma) at each pixel's brightness, so 1 sigma is "as large as the noise already in the photo".
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/quality_dark.svg">
+  <img alt="Two line charts of error against size per photo. Worst-case error: MiniRaw stays between 0.4 and 1.1 sigma from 8.5 to 15.6 MB; a fixed square-root curve needs 19 MB to get below 1.3 sigma and reaches 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20% below the square-root curve at the same size; JPEG XL lossy is higher." src="img/quality_light.svg">
+</picture>
+
+How to read the size-versus-error chart:
+
+- **Worst-case error is where MiniRaw differs.** MiniRaw fits the noise level for each sensor and brightness, so
+  at 9.7 MB no pixel errs by more than 0.91 sigma. At a similar 10.8 MB, a fixed square-root curve (the
+  approach of in-camera lossy raw modes) reaches 5.0 sigma, in the shadows and highlights where the curve
+  doesn't match the sensor. At 12.6 MB, JPEG XL lossy reaches 10.8 sigma; it is tuned for how displayed images
+  look, not for raw data that will be pushed and graded.
+- **Average error is about 20% lower than the square-root curve's at the same size.** Most of the saving comes
+  from not storing noise; calibration mainly adds a guarantee for every pixel.
+
+Encode speed matters as much as size for day-to-day use:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/speed_dark.svg">
+  <img alt="Two scatter charts of encode time against size. Lossless: JPEG-LS 28.8 MB in 0.13 s; JPEG XL effort 4 29.2 MB in 0.65 s; MiniRaw effort 4 28.1 MB in 1.3 s; MiniRaw effort 7 27.7 MB in 2.6 s; JPEG XL effort 7 28.3 MB in 3.3 s; ZIP 47.5 MB in 2.3 s. Near-lossless and lossy: MiniRaw hot tier 12.1 MB in 1.1 s (effort 4) and 11.7 MB in 2.5 s (effort 7), worst pixel 0.7 sigma; square-root curve 10.8 MB in 2.3 s, worst 5.0 sigma; JPEG XL lossy 7.7 MB in 2.0 s, worst 12.8 sigma." src="img/speed_light.svg">
+</picture>
+
+- **Lossless.**
+  - At effort 7, MiniRaw is smaller *and* faster than JPEG XL lossless: 27.7 MB in 2.6 s against 28.3 MB in
+    3.3 s. JPEG XL finds MiniRaw's prediction residuals cheaper to model than raw pixels, and the exact layer
+    is range-coded.
+  - At the default effort 4, MiniRaw takes 1.3 s for 28.1 MB.
+  - JPEG-LS is the fastest lossless option (0.13 s) and about 4% larger.
+- **Near-lossless.**
+  - MiniRaw's hot tier encodes in 1.1 s (effort 4) and keeps every pixel within the sensor noise.
+  - The lossy methods reach similar or smaller sizes in about 2 s, but their worst pixels are 5-13x the noise.
+
+Timing: Apple M1, from sensor data already in memory, so reading the file and decoding the raw are excluded.
+Tiled codecs encode the four Bayer planes in 512-pixel tiles on 8 threads, as MiniRaw does. ZIP is
+single-threaded, as zip tools are. The camera's own ARW encoder runs in hardware and is shown only as a size line.
+Medians of 10 files; the data is in `results/experiments/speed_personal_raws.csv`.
+
+Methods, all on the same sensor data:
+- JPEG-LS, JPEG XL lossless and the square-root curve code the four Bayer planes in 512-pixel tiles at JPEG XL
+  effort 7, the same tiles and effort as MiniRaw.
+- JPEG XL lossy uses distances 0.05 to 1.0. Its output is clipped at the white level.
+- The ARW size includes about 3.7 MB of embedded previews and metadata; its raw data alone is 37.5 MB.
+
+Not included: learned codecs (e.g. RAWIC, which needs a GPU), and other manufacturers' proprietary lossy modes,
+which can't be run on these files.
+
+These figures come from one camera. The 20-camera dev set (older 2003-2009 sensors) is in
+[results/report.md](../results/report.md), and this set's full report is in
+[results/report_personal_raws.md](../results/report_personal_raws.md).
+
+### Held-out benchmark: MIT-Adobe FiveK
+
+The figures above come from the files the codec was tuned on. To check how they generalize, MiniRaw was run once,
+with its configuration frozen, on 60 FiveK DNGs it had never seen (2003-2009 Canon, Leica, Nikon and Sony
+cameras). 40 of them are true linear raw, from 14 cameras. The other 20 were processed in camera, so they are
+checked for exactness but left out of the size statistics. Figures are medians over images, with 95% bootstrap
+intervals.
+
+| Ratio | Median | Interval |
+| --- | --- | --- |
+| Hot tier (L0-L2) / camera raw file | **0.41** | [0.36, 0.43] |
+| Hot tier / JPEG XL lossless | 0.47 | [0.41, 0.52] |
+| All layers, sensor-exact / camera raw file | 0.86 | [0.84, 0.89] |
+| All layers / JPEG XL lossless | **1.00** | [1.00, 1.01] |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/fivek_holdout_size_dark.svg">
+  <img alt="Strip chart of size relative to the camera's raw file, one dot per image for 40 held-out FiveK images from 14 cameras. JPEG XL lossless: median 0.86x, range 0.79 to 0.93. MiniRaw all layers, bit-exact: median 0.86x, range 0.79 to 1.00, overlapping JPEG XL. MiniRaw hot tier at step 1.0: median 0.41x, range 0.27 to 0.54." src="img/fivek_holdout_size_light.svg">
+</picture>
+
+What held up:
+- **The hot tier is 59% smaller than the camera's file**, with the worst pixel at 0.61 sigma, and no pixel
+  outside the error bound at any step from 0.5 to 2.0.
+- **Every exact decode matched its SHA-256** (60/60), as did region decodes and strip-and-restore.
+- **Worst-case error is where MiniRaw wins.** At the same average error as the square-root curve the sizes tie;
+  at the same worst-case error the curve is 12-40% larger (within MiniRaw's step range).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/fivek_holdout_quality_dark.svg">
+  <img alt="Two line charts of error against median bits per pixel on 40 held-out FiveK images. Worst-case error: MiniRaw runs from 1.08 sigma at 2.07 bpp to 0.41 sigma at 3.71 bpp, with the default step 1.0 at 2.78 bpp and 0.61 sigma; the square-root curve runs from 2.52 sigma at 1.81 bpp to 0.17 sigma at 5.37 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the two curves nearly overlap, MiniRaw slightly lower." src="img/fivek_holdout_quality_light.svg">
+</picture>
+
+What didn't:
+- **Lossless ties JPEG XL; it doesn't beat it.** The 2% saving above is specific to the Sony A7 IV files. One
+  Leica D-LUX 3 frame is 15% larger than JPEG XL, for reasons not yet found.
+- **Two spec checks fail.** The per-decile bias is 0.096 sigma against a 0.02 limit (a known offset of the spec's
+  reconstruction). The RMSE limit of 0.32 sigma is missed by one very dark frame (0.321), where most bins are
+  only 1-3 DN wide.
+- **The noise estimate is still somewhat high on textured, low-noise images.** On a textured synthetic test,
+  sigma comes out about 10% high in the median case.
+
+**How the benchmark got here.** These are the second set of held-out results. The first run, on a different 60
+images, broke the error bound on 3 images and crashed on one. The cause was the noise model fitting image texture
+as noise at low ISO, which made the hot tier discard real detail. The fix (D26 and D27 in
+[DEVIATIONS.md](../results/DEVIATIONS.md)) only ever lowers the noise model, never raises it. It was developed on the
+dev images and a new textured synthetic test. Because the first 60 images had then influenced the design, a fresh
+set of 60 was drawn and run once; that is the set reported here.
+
+| First test set, 60 images | Before the fix | After |
+| --- | --- | --- |
+| Pixels outside the error bound (step 1.0 / step 2.0) | 6,867 / 474,031 | 0 / 0 |
+| Images where the noise model was corrected | 47, raised to fit texture | 24, lowered only |
+| Hot tier / JPEG XL lossless | 0.468 | 0.483 (keeps the detail it was discarding) |
+
+Full write-up: [results/fivek_benchmark.md](../results/fivek_benchmark.md).
+
+To regenerate the charts from your own files:
+
+```sh
+python -m bench.run --dir YOUR_FOLDER --quick
+python -m bench.experiments.readme_chart_data YOUR_FOLDER
+python -m bench.experiments.speed_chart_data YOUR_FOLDER
+python -m bench.experiments.readme_charts YOUR_FOLDER_NAME
+```
+
+
+## Setup
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest              # M0-M3 acceptance tests on synthetic data
+```
+
+## CLI
+
+```sh
+miniraw encode IN.ARW OUT.mraw [--step 1.0] [--effort 4] [--no-l3] [--no-original] [--threads N]
+
+# decode: the output type follows the extension
+miniraw decode IN.mraw OUT.ARW                 # the original raw file: byte for byte with L3, near-lossless without
+miniraw decode IN.mraw OUT.dng                 # raw again: bit-exact sensor data (verified), lossless-JPEG DNG
+miniraw decode IN.mraw OUT.jpg                 # developed with LibRaw, camera WB, EXIF kept
+miniraw decode IN.mraw OUT.png --bits 16       # also .tif; --exposure EV, --half-size, --no-auto-bright
+miniraw decode IN.mraw thumb.jpg --mode preview      # from the base layer only (~40 ms)
+miniraw decode IN.mraw crop.jpg --region x,y,w,h     # reads only the touched tiles
+miniraw decode IN.mraw OUT.npy | OUT.json      # raw mosaic array | header
+miniraw info IN.mraw
+miniraw strip IN.mraw        # drop L3 in place
+miniraw split IN.mraw        # move L3 to IN.mraw.l3 (decode with --sidecar IN.mraw.l3)
+```
+
+Default decode modes: `exact` for `.dng` and `.npy` when L3 is present (`signal` with a note if the file is
+stripped), `signal` for images (visually identical, about twice as fast). The DNG carries the colour matrix,
+white balance, black and white levels, default crop, orientation and capture EXIF recorded at encode time.
+It reproduces the sensor data exactly, in a standard format.
+
+**Restoring the original file.** `encode` also keeps everything else in the original raw file, as long as its
+sensor data is stored as lossless-JPEG tiles (Sony ARW lossless, lossless DNG). That means the TIFF structure,
+maker notes and embedded previews (repacked losslessly). Decoding to the original extension (`OUT.ARW`, matched
+case-insensitively) re-encodes the tiles with the file's own Huffman tables and returns the identical file,
+checked against its SHA-256.
+
+This is verified when encoding. If a file can't be reproduced exactly, `encode` says why, and decoding to `.dng`
+still works.
+
+What it costs, per 33 MP ARW:
+- **Hot tier: about 0.4 MB** for the container (TIFF structure, maker notes, small previews).
+- **Cold tier: about 1-4 MB** for the camera's full-size preview JPEG, repacked losslessly.
+
+**Without L3** (`--no-l3`, `strip`, `bundle --cold drop`), decoding to `OUT.ARW` still gives a valid ARW: same
+structure, maker notes and EXIF, with the near-lossless pixels and a full-size preview regenerated from them. It is
+checked by reading it back with LibRaw, opens like any ARW, and is about the original's size. It is not
+byte-identical, since the exact pixels live in L3.
+
+`--no-original` skips the container and previews. Raw formats that compress the sensor data differently (NEF, CR2,
+CR3, compressed ARW, ...) decode to DNG.
+
+## Bundle a whole folder
+
+```sh
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip                 # everything restorable exactly
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold split    # trip.zip (hot) + trip.l3.zip (cold)
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold drop     # near-lossless raws only, smallest (= --no-l3)
+miniraw unbundle trip.zip restored/                              # raws come back as DNG
+miniraw unbundle trip.zip previews/ --raw-as jpg                 # or as developed JPEGs
+miniraw unbundle trip.zip --list
+```
+
+`bundle` accepts the same encoding flags as `encode` (`--step`, `--effort`, `--no-l3`, `--threads`). It walks the
+folder, keeps its structure, and writes one zip:
+
+| In the folder | In the bundle | Restored as |
+|---|---|---|
+| Raw files (2x2 Bayer: ARW, NEF, CR2/CR3, DNG, ...) | `.mraw` | the identical file where supported (Sony ARW lossless, lossless DNG); otherwise DNG with bit-exact sensor data. `--raw-as dng/jpg/png/tif/mraw` for other forms |
+| JPEG | lossless JPEG XL repack, about 21% smaller | the identical JPEG, byte for byte |
+| PNG | stored; or lossless JPEG XL with `--png repack`, about 42% smaller | identical bytes; or identical pixels (only PNGs without colour or text metadata are repacked) |
+| Anything else (sidecars, video, X-Trans raws, ...) | stored as-is | the identical file |
+
+A `manifest.json` in the zip records every file's path, size, SHA-256 and modification time. `unbundle` checks each
+restored file against it and restores the modification times. On 10 Sony A7 IV RAW+JPEG pairs, the 456 MB folder
+became a 355 MB bundle (-22%), and unbundling gave back an identical folder: `diff -r` is clean, including all 10
+ARWs byte for byte. With `--cold split`, the main zip holds the near-lossless raws and the JPEGs (153 MB). The
+`.l3.zip` holds everything needed to restore the exact originals.
+
+Without the `.l3.zip`, or with `--no-l3`, unbundling still gives back ARWs under their original names, holding
+near-lossless pixels. On the same folder, a `--no-l3` bundle is 155 MB (-66%) and unbundles to 10 valid ARWs plus
+the identical JPEGs.
+
+**Why JPEG and PNG don't get MiniRaw's treatment.** MiniRaw saves space by not storing the random sensor noise in
+linear raw data. By the time a photo is a JPEG or PNG, it has been demosaiced, denoised, tone-curved and rounded
+to 8 bits, and the remaining noise is smaller than one 8-bit step, so there is nothing to drop. Measured on 16
+JPEGs, applying the method gave files 4x larger than the original JPEG. Lossless JPEG XL repacking is the right
+tool for those files, and the bundle uses it (`bench/experiments/jpeg_png.py`).
+
+## Try it on your own raw file
+
+```sh
+python -m bench.eval PATH/TO/IMG.NEF                  # sizes, checks, step sweep, B5 comparison
+python -m bench.eval IMG.CR2 --render out/ --out IMG.mraw   # + render comparison crops, keep the .mraw
+python -m bench.eval IMG.ARW --quick                  # skip the sweep and B5
+```
+
+Any 2x2-Bayer raw that LibRaw (rawpy) opens works: NEF, CR2, CR3, ARW, DNG, RAF (Bayer models), ORF, RW2 and others.
+Use the camera's lossless or uncompressed raw mode: lossy raw modes (e.g. Nikon "compressed", Sony "compressed")
+have already discarded data, and the script warns when it detects that.
+
+## Benchmark
+
+```sh
+python -m bench.datasets --split dev        # 20 FiveK DNGs, one per camera (~200 MB)
+python -m bench.run --split dev             # per-image CSVs in results/per_image/dev/ (resumable)
+python -m bench.report --split dev          # results/report.md
+```
+
+The same commands take `--split test` and `--split holdout` (60 images each). The held-out results and how to
+reproduce them are in [results/fivek_benchmark.md](../results/fivek_benchmark.md).
+
+Settings live in `configs/phase1.toml`. Every departure from the spec is in
+[results/DEVIATIONS.md](../results/DEVIATIONS.md).
+
+## Layout
+
+```text
+src/miniraw/   io_raw, noise, vst, layers, entropy, container, codec, cli
+baselines/     b1_native (DNG strip bytes), b2_jxl (JPEG XL lossless), b5_sqrt (uncalibrated sqrt curve)
+bench/         datasets, synth, metrics, run, report, splits/
+tests/         M0-M3 acceptance tests
+results/       generated; never edited by hand (except DEVIATIONS.md)
+```

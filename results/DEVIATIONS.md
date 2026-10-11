@@ -25,6 +25,29 @@ Every departure from the spec, with the reason. Numbered for reference from code
 - **D27. Bins split where the middle DN would miss the error bound.** The decoder reconstructs at a bin's middle DN (`lo + (n-1)//2`), not at its T-midpoint. T is concave, so in a wide bin the middle DN sits off-centre by an amount that grows with the square of the step. At step 1.0 that stays inside the one-DN slack of the bound. At step 2.0 it missed by up to 0.01σ: 474,031 pixels in 12 of the 60 pre-D26 test images, mostly on plain affine models (Canon 5D Mark II, 14-bit). It was noticed in the first holdout report and diagnosed on a dev image. `vst.forward_table` now splits any bin whose middle DN breaks the bound. It is encoder-only, since the decoder reads just the bin starts. On all 140 dev, test and holdout images, steps 0.5 and 1.0 produce byte-identical tables. At step 1.5, 7 of 560 planes gain 168 bins in total; at step 2.0, 32 planes gain 490.
 - **D28. Technical statistics in the header, relative to full scale.** The noise model is stored in raw DN, so the same ISO differed 34x between cameras in the index benchmark (H4). The header now carries `stats` (`src/miniraw/stats.py`, about 120 bytes): SNR at 18% of full scale, the share of clipped pixels, and the mean and log-mean signal level. On the 498 `index500` images (`bench/experiments/header_stats.py`), noise at 18% grey tracks ISO with a pooled rank correlation of 0.80, against 0.48 for the raw-DN slope. The spread between camera medians at the same ISO fell from 19-34x to 5-7x. Log-mean level ranks FiveK night photos at an AUC of 0.90, against 0.83 for the mean level. Dynamic range (full scale over noise at black) was tried and dropped: it depends on the read-noise term, which one image often can't identify (D4), and it spread 19 stops between cameras at ISO 100. L1, L2 and L3 are unchanged.
 
+## Format version 2
+
+- **D29. Format version 2: no L1, an `IDX` index thumbnail, and an optional stored embedding.** Written by default; `--format-version 1` writes v1.0 files, and a file written by the v1.0.0 release decodes bit-identically (`tests/data`). Readers reject newer versions.
+  - **No L1.** In every variant tested (`bench/experiments/l1_index.py`), L2 was 0.8-3.6% larger with L1 than without, so the spec's non-redundant base layer was an added cost. Construction B was worse still (D18). Without L1, G3 no longer applies.
+  - **`IDX`**, placed first after the header (`src/miniraw/index.py`):
+    - Planes are box-averaged in linear light to about 1024 px.
+    - The reduced mosaic is developed by LibRaw at half size, resized to 512 px on the long side, and coded with JPEG XL at distance 1.0.
+    - Distance 1.0 was chosen on dev: CLIP cosine to a full render 0.975 at 33 KB, against 0.956 at distance 1.5 and 0.915 for JPEG quality 85 at the same size. `preview` decodes it.
+  - **Embedding.** `embed` holds a list of {model, dim, dtype, scale, vec}: an int8 OpenCLIP embedding of `IDX` (scale 1/127), 512 bytes for ViT-B/32. It needs the `[index]` extra at encode time (`--embed`). The int8 loss is 0.004 of neighbour overlap.
+  - **Result** (`results/v2_benchmark.md`):
+    - Hot tier -1.8% per image on the fresh `holdout2` split and on the holdout, and the lossless total -1.2 to -1.4% (0.987-0.989x JPEG XL).
+    - `IDX` is a median 34.5 KB. Neighbour overlap with a full render is 0.841 (CLIP) and 0.860 (SigLIP) on the fresh `index500b`, against 0.756 and 0.764 for the format 1 L1, with zero-shot accuracy within 1 point of the full render.
+    - The plan's overlap bar of 0.90 is not met; the owner accepted the result.
+  - **The spec's claim that the base layer doubles as the index is withdrawn:** a redundant thumbnail is cheaper and better.
+- **D30. `csafe` signal-mode reconstruction (format 2 default).**
+  - **The rule.** Even-sized bins have no centre value. The spec's floor rule sits half a DN low (D17), and the pixel checkerboard fixes that but can break the bound (2,749 pixels on the test split). `csafe` stores one bit per bin flagging even bins whose ceiling keeps every value within the bound; those bins use the checkerboard, all others the floor.
+  - **Dev results.**
+    - On dev it matches the checkerboard's bias (median worst decile 0.084, 0.040 excluding the top decile) with no violations.
+    - Alternating floor and ceiling *between* bins was also tried, and was weaker (0.059 excluding the top decile).
+  - **Confirmation.** On `holdout2` the bias falls from 0.102 to 0.063, and on the holdout from 0.096 to 0.056, with 0 pixels outside the bound.
+  - **The 0.02 gate still fails on real images,** though `csafe` meets it on smooth synthetic scenes (median 0.016). The remainder comes from uneven pixel density inside bins, which the bound keeps reconstruction from following.
+  - **Cost.** The median worst pixel rises about 0.015σ.
+
 ## Data (spec 7)
 
 - **D6. Dev split is FiveK only: 20 images, one per camera for the 20 most common models, seed 0.** RAISE downloads require a registration form with name, affiliation and email, plus acceptance of non-commercial terms. That is an owner action, and the legal question in spec 7 is still open. RawNIND has not been downloaded yet. `bench/splits/test.txt` holds 60 FiveK images from the same 20 cameras; it has not been run.

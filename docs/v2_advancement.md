@@ -1,6 +1,9 @@
 # MiniRaw v2: more compressed, more indexable
 
-October 11, 2026. A research plan, not a commitment. Every gain below is labelled **measured** (a number from this
+October 11, 2026. A research plan, not a commitment. **Status:** v2.0 (A1, B1, B2, C5, C6) is implemented as format version 2;
+results in [results/v2_benchmark.md](../results/v2_benchmark.md). A1, B2 and C6 met their rules. B1 met size and
+zero-shot but not neighbour overlap (0.84-0.86 against 0.90) and was accepted. C5 cut bias 38-42% without bound
+violations but not to 0.02. Every gain below is labelled **measured** (a number from this
 repo), **estimated** (derived from a measured bound) or **speculative** (plausible, no evidence yet). How the codec
 works today is in [METHOD.md](METHOD.md).
 
