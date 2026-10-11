@@ -1,0 +1,12 @@
+DSC02666.ARW 30.3 MB identical
+DSC03179.ARW 30.2 MB identical
+DSC03393.ARW 41.4 MB identical
+DSC04227.ARW 34.5 MB identical
+DSC04475.ARW 31.8 MB identical
+DSC04565.ARW 27.7 MB identical
+DSC04574.ARW 27.3 MB identical
+DSC04659.ARW 31.7 MB identical
+DSC04664.ARW 30.4 MB identical
+DSC04818.ARW 30.1 MB identical
+median: file-exact 30.3 MB against 41.2 MB originals; hot with container 11.9 MB; CTR 0.18 MB, SRC 3.03 MB; identical 10/10
+wrote /Users/greenli/repos/miniraw/results/experiments/file_exact_personal_raws_v2.csv

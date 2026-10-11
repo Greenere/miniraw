@@ -27,9 +27,11 @@ THEMES = {
 MARKERS = ["o", "s", "^"]
 
 
-def load(name):
+def load(name, extra_name=None):
+    """Per-image CSVs of `name` merged with the format-independent baselines of readme_<extra_name>.csv."""
     df = pd.concat([pd.read_csv(f) for f in glob.glob(str(ROOT / "results" / "per_image" / name / "*.csv"))])
-    extra = pd.read_csv(ROOT / "results" / "experiments" / f"readme_{name}.csv")
+    df["IDX_bytes"] = df["IDX_bytes"].fillna(0) if "IDX_bytes" in df else 0      # format 2's index thumbnail
+    extra = pd.read_csv(ROOT / "results" / "experiments" / f"readme_{extra_name or name}.csv")
     return df.merge(extra, on=["key", "npx"])
 
 
@@ -46,7 +48,7 @@ def style(ax, t):
 
 def size_chart(df, t, path, camera):
     mb = lambda col: float(np.median(df[col])) / 1e6  # noqa: E731
-    hot = lambda st: float(np.median(df["L0_bytes"] + df["L1_bytes"] + df["L2_bytes"]  # noqa: E731
+    hot = lambda st: float(np.median(df["L0_bytes"] + df["IDX_bytes"] + df["L1_bytes"] + df["L2_bytes"]  # noqa: E731
                                      if st == 1.0 else df[f"step{st}_L0L1L2_bytes"])) / 1e6
     unc = float(np.median(df["npx"] * df["bit_depth"] / 8)) / 1e6
     arw = mb("file_bytes")
@@ -56,8 +58,8 @@ def size_chart(df, t, path, camera):
         ("Sony ARW, lossless compressed", arw, False),
         ("JPEG-LS lossless", mb("jpegls_bytes"), False),
         ("JPEG XL lossless", mb("B2_bytes"), False),
-        ("MiniRaw, all layers (bit-exact)", float(np.median(df["L0_bytes"] + df["L1_bytes"] + df["L2_bytes"]
-                                                           + df["L3_bytes"])) / 1e6, True),
+        ("MiniRaw, all layers (bit-exact)", float(np.median(df["L0_bytes"] + df["IDX_bytes"] + df["L1_bytes"]
+                                                           + df["L2_bytes"] + df["L3_bytes"])) / 1e6, True),
     ]
     near = [
         ("MiniRaw hot tier, step 1.0", hot(1.0), True),
@@ -103,7 +105,7 @@ def size_chart(df, t, path, camera):
 
 
 def quality_chart(df, t, path, camera):
-    hot = lambda st: (df["L0_bytes"] + df["L1_bytes"] + df["L2_bytes"]) if st == 1.0 \
+    hot = lambda st: (df["L0_bytes"] + df["IDX_bytes"] + df["L1_bytes"] + df["L2_bytes"]) if st == 1.0 \
         else df[f"step{st}_L0L1L2_bytes"]  # noqa: E731
     pre = lambda st, m: df[m] if st == 1.0 else df[f"step{st}_{m}"]  # noqa: E731
     series = [
@@ -122,7 +124,9 @@ def quality_chart(df, t, path, camera):
         style(ax, t)
         ax.set_yscale("log")
         ax.axhline(1.0, color=t["muted"], linewidth=1, linestyle=(0, (4, 3)), zorder=1)
-        ax.text(0.99, 1.0, "sensor noise level ", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+        left = idx == 1          # worst-case panel: the right end is crowded by the curves meeting 1 sigma
+        ax.text(0.01 if left else 0.99, 1.0, " sensor noise level" if left else "sensor noise level ",
+                transform=ax.get_yaxis_transform(), ha="left" if left else "right", va="bottom",
                 fontsize=8, color=t["muted"])
         for i, (name, pts) in enumerate(series):
             pts = sorted(pts)
@@ -134,12 +138,13 @@ def quality_chart(df, t, path, camera):
         ax.set_xlabel("Median size per photo (MB)", color=t["ink2"], fontsize=9)
         ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}σ"))
     axes[0].set_ylabel("Error, in units of the sensor's own noise", color=t["ink2"], fontsize=9)
-    # Direct labels on the left panel, placed off the lines: MiniRaw left of its smallest file,
-    # the square-root curve above its largest-file point, JPEG XL to the right of its last point.
-    anchors = [(0, min, (-10, -14), "right"), (1, max, (0, 10), "right"), (2, max, (8, -3), "left")]
-    for i, pick, off, ha in anchors:
+    # Direct labels on the left panel, placed off the lines and clear of the noise-level text: MiniRaw below its
+    # second-largest file, the square-root curve right of its middle point, JPEG XL right of its largest file.
+    anchors = [(0, -2, (0, -16), "center"), (1, 2, (8, 4), "left"), (2, -1, (8, -3), "left")]
+    for i, k, off, ha in anchors:
         name, pts = series[i]
-        p = pick(pts)
+        pts = sorted(pts)
+        p = pts[k if -len(pts) <= k < len(pts) else -1]
         axes[0].annotate(name.split("\n")[0], (p[0] / 1e6, p[1]), xytext=off, textcoords="offset points",
                          fontsize=8.5, color=t["ink"], ha=ha, fontweight="bold" if i == 0 else "normal")
     leg = axes[1].legend(loc="lower left", fontsize=8, frameon=False,
@@ -161,7 +166,7 @@ def speed_chart(sp, errs, t, path, camera, ref):
                 "miniraw-hot": (t["series"][0], "D", "MiniRaw hot tier (every pixel within 1 sigma)"),
                 "lossy": (t["series"][1], "s", "Lossy (worst pixel beyond the sensor noise)")}
     # (dx, dy) label offsets in points, chosen per method so labels clear markers and each other
-    offsets = {"JPEG-LS lossless": (7, 4), "JPEG XL lossless, effort 4": (0, 9),
+    offsets = {"JPEG-LS lossless": (0, -16), "JPEG XL lossless, effort 4": (0, 9),
                "JPEG XL lossless, effort 7": (0, 9), "ZIP / Deflate": (8, -3),
                "MiniRaw, all layers, effort 4": (-6, -8), "MiniRaw, all layers, effort 7": (6, -8),
                "MiniRaw hot tier, effort 4": (-9, 3), "MiniRaw hot tier, effort 7": (9, 3),
@@ -199,21 +204,24 @@ def speed_chart(sp, errs, t, path, camera, ref):
                         va="bottom" if dy > 0 else "top",
                         color=t["ink"] if "MiniRaw" in r["method"] else t["ink2"],
                         fontweight="bold" if "MiniRaw" in r["method"] else "normal")
-        ax.set_xlim(0.08, 10)
+        ax.set_xlim(0.04, 10)
         ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g} s"))
         ax.set_xlabel("Encode time per photo (log scale)", color=t["ink2"], fontsize=9)
     axes[0].set_ylabel("Median size per photo (MB)", color=t["ink2"], fontsize=9)
     leg = fig.legend(list(handles.values()), list(handles.keys()), loc="lower center", ncol=4, fontsize=8,
                      frameon=False, labelcolor=t["ink2"], bbox_to_anchor=(0.5, -0.01))
-    fig.suptitle(f"Encode speed versus size: {camera}, median of {sp['file'].nunique()} files, Apple M1, 8 threads "
+    cpu = sp["cpu"].iloc[0] if "cpu" in sp else "Apple M1"      # speed CSVs before the cpu column came from an M1
+    fig.suptitle(f"Encode speed versus size: {camera}, median of {sp['file'].nunique()} files, {cpu}, 8 threads "
                  "(lower-left is better)", x=0.02, ha="left", color=t["ink"], fontsize=11, fontweight="bold")
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(path, facecolor=t["surface"])
     plt.close(fig)
 
 
-def main(name, review=None):
-    df = load(name)
+def main(name, review=None, extra_name=None, prefix=""):
+    """prefix names the output files (docs/img/<prefix>size_light.svg, ...), so format 2 charts don't
+    overwrite format 1's."""
+    df = load(name, extra_name)
     camera = df["camera"].mode()[0].replace("SONY ILCE-7M4", "Sony A7 IV")
     OUT.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": ["Helvetica", "Arial", "DejaVu Sans"], "svg.fonttype": "path"})
@@ -227,12 +235,19 @@ def main(name, review=None):
             ref = {"unc": float(np.median(sp["unc_bytes"])) / 1e6, "arw": float(np.median(sp["file_bytes"])) / 1e6}
         for ext in ("svg",) + (("png",) if review else ()):
             dst = (Path(review) if ext == "png" else OUT)
-            size_chart(df, t, dst / f"size_{mode}.{ext}", camera)
-            quality_chart(df, t, dst / f"quality_{mode}.{ext}", camera)
+            size_chart(df, t, dst / f"{prefix}size_{mode}.{ext}", camera)
+            quality_chart(df, t, dst / f"{prefix}quality_{mode}.{ext}", camera)
             if sp is not None:
-                speed_chart(sp, errs, t, dst / f"speed_{mode}.{ext}", camera, ref)
-    print("wrote", sorted(p.name for p in OUT.glob("*.svg")))
+                speed_chart(sp, errs, t, dst / f"{prefix}speed_{mode}.{ext}", camera, ref)
+    print("wrote", sorted(p.name for p in OUT.glob(f"{prefix}*.svg")))
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("name")
+    ap.add_argument("review", nargs="?")
+    ap.add_argument("--extra", help="readme_<EXTRA>.csv holds the baselines (default: NAME)")
+    ap.add_argument("--prefix", default="", help="output file name prefix")
+    a = ap.parse_args()
+    main(a.name, a.review, a.extra, a.prefix)

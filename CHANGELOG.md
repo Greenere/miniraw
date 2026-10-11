@@ -10,6 +10,13 @@
 - `miniraw info` shows the format version, `IDX` and stored embeddings.
 - D24 (cross-plane prediction) and D25 (production-path efficiency) written up in `results/DEVIATIONS.md`.
 - Benchmark: `configs/v2.toml`, `bench.run --name`, fresh `holdout2` and `index500b` splits, `bench/experiments/v2_compare.py`, and the `IDX` arm in the index benchmark.
+- **Sony A7 IV results under format 2** in the README and `results/v2_benchmark.md`:
+  - Hot tier 11.6 MB (-72% against the ARW); every layer 27.6 MB, 2.5% under JPEG XL lossless.
+  - File-exact 30.3 MB, with all 10 ARWs restored byte for byte.
+  - The bias check passes on this camera (0.017).
+  - New: `bench/experiments/file_exact.py`.
+  - `speed_chart_data` takes an output name and format version and records the CPU.
+  - `readme_charts` takes `--extra` and `--prefix` and counts IDX.
 - `.gitignore` ignores only the top-level `data/`, so `tests/data` fixtures are tracked.
 ## v1.0.0 (2026-10-11)
 

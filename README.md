@@ -62,9 +62,62 @@ render closely:
 reconstruction bias -38% with no bound violations. The format 1 base layer (L1) is gone, because L2 coded better
 without it, and `IDX` replaces it for preview and search. Details: [results/v2_benchmark.md](results/v2_benchmark.md).
 
-**On one modern camera** (10 Sony A7 IV files, format 1): the hot tier was 0.28x the 41.2 MB lossless ARW, every
-layer 2% under JPEG XL lossless, and the original ARW restored byte for byte at 30.9 MB. That set was used to tune
-the codec; its charts are in [docs/readme_v1.md](docs/readme_v1.md).
+### A modern camera: Sony A7 IV
+
+10 photos from a Sony A7 IV (33 MP, 14-bit, lossless-compressed ARW), medians over the 10 files. These photos were
+used while developing the codec, so treat them as a tuning set, not held-out evidence.
+
+- **Hot tier: 11.6 MB per photo, 72% smaller than the 41.2 MB ARW**, including the 33 KB index thumbnail. The median
+  worst pixel is 0.69x the sensor's noise at that brightness, and no pixel leaves the bound. The per-decile bias
+  check passes on this camera (0.017 against a 0.02 limit).
+- **Every layer: 27.6 MB, sensor-exact**, 33% smaller than the ARW and 2.5% smaller than JPEG XL lossless (28.3 MB).
+- **File-exact: 30.3 MB, 26% smaller than the ARW.** This restores the original ARW byte for byte, verified on all
+  10 files. It adds the ARW's container (0.18 MB, hot) and embedded previews (3.0 MB, cold, losslessly repacked).
+- **Against format 1** on the same files: hot tier -1.2%, every layer -0.7%, file-exact 30.9 to 30.3 MB.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_size_dark.svg">
+  <img alt="Bar chart of median size per photo for 10 Sony A7 IV files, MiniRaw format 2. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.6 MB (bit-exact); MiniRaw hot tier 11.6 MB at step 1.0 and 9.4 MB at step 1.5." src="docs/img/a7iv_v2_size_light.svg">
+</picture>
+
+**Size against error.** Error is in units of the sensor's own noise at each pixel's brightness, so 1 sigma is "as
+large as the noise already in the photo".
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_quality_dark.svg">
+  <img alt="Two line charts of error against median size per photo for 10 Sony A7 IV files. Worst-case error: MiniRaw runs from 1.15 sigma at 8.3 MB to 0.43 sigma at 15.5 MB; the fixed square-root curve needs 18.7 MB to reach 1.1 sigma and is at 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20 percent below the square-root curve at the same size; JPEG XL lossy is higher." src="docs/img/a7iv_v2_quality_light.svg">
+</picture>
+
+- **Worst-case error is where MiniRaw differs.** It fits the noise for each sensor and brightness:
+  - At 9.4 MB (step 1.5), no pixel errs by more than 0.92 sigma.
+  - At a similar 10.8 MB, a fixed square-root curve reaches 5.0 sigma, in the shadows and highlights where the
+    curve doesn't match the sensor.
+  - JPEG XL lossy reaches 10.8 sigma at 12.6 MB. It is tuned for how displayed images look, not for raw data that
+    will be pushed and graded.
+- **Average error is about 20% lower than the square-root curve's at the same size** (17-22% from 9 to 15 MB). Most
+  of the saving comes from not storing noise; calibration mainly adds a guarantee for every pixel.
+
+**Encode speed.**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_speed_dark.svg">
+  <img alt="Two scatter charts of encode time against size for 10 Sony A7 IV files on an Apple M4 Pro. Lossless: JPEG-LS 28.8 MB in 0.07 s; JPEG XL effort 4 29.2 MB in 0.30 s; MiniRaw effort 4 28.0 MB in 0.82 s; MiniRaw effort 7 27.6 MB in 1.4 s; JPEG XL effort 7 28.3 MB in 1.5 s; ZIP 47.5 MB in 1.7 s. Near-lossless and lossy: MiniRaw hot tier 11.9 MB in 0.72 s (effort 4) and 11.6 MB in 1.3 s (effort 7), worst pixel 0.7 sigma; square-root curve 10.8 MB in 1.1 s, worst 5.0 sigma; JPEG XL lossy 7.7 MB in 0.95 s, worst 12.8 sigma." src="docs/img/a7iv_v2_speed_light.svg">
+</picture>
+
+- **Lossless.**
+  - At effort 7, MiniRaw is smaller *and* slightly faster than JPEG XL lossless: 27.6 MB in 1.4 s against
+    28.3 MB in 1.5 s.
+  - At the default effort 4 it takes 0.82 s for 28.0 MB.
+  - JPEG-LS is the fastest lossless option (0.07 s) and about 4% larger.
+- **Near-lossless.** MiniRaw's hot tier encodes in 0.72 s (effort 4) and keeps every pixel within the sensor
+  noise. The lossy methods reach similar or smaller sizes in about 1 s, but their worst pixels are 5-13x the noise.
+- **Timing.** Apple M4 Pro, from sensor data already in memory, so reading the file and decoding the raw are
+  excluded. Tiled codecs encode the four Bayer planes in 512-pixel tiles on 8 threads, as MiniRaw does. ZIP is
+  single-threaded, as zip tools are.
+
+Data: `results/per_image/personal_raws_v2/`, `results/experiments/speed_personal_raws_v2.csv` and
+`file_exact_personal_raws_v2.csv`. The format 1 charts for the same files are in
+[docs/readme_v1.md](docs/readme_v1.md).
 
 **Limitations.**
 - 2x2 Bayer sensors only.

@@ -150,6 +150,38 @@ ground-truth ratio is unchanged (1.0404 against a theory of 1.041).
 Per-split reports: [report_holdout2_v2.md](report_holdout2_v2.md), [report_holdout2_v1.md](report_holdout2_v1.md),
 [report_holdout_v2.md](report_holdout_v2.md), [report_dev_v2.md](report_dev_v2.md).
 
+### Sony A7 IV (tuning set, paired)
+
+10 photos from a Sony A7 IV (33 MP, 14-bit, lossless ARW), the set used during development, so this is not held-out
+evidence. Format 1 per-image results are the existing `results/per_image/personal_raws/`.
+
+| Measure (format 2 / format 1, per image) | Median [95% CI] |
+| --- | --- |
+| Hot tier (L0 + IDX + L1 + L2) | 0.9877 [0.9852, 0.9901] |
+| L2 alone | 0.9899 [0.9875, 0.9921] |
+| All layers (L1 + L2 + L3) | 0.9934 [0.9928, 0.9944] |
+
+| Check | Format 1 | Format 2 |
+| --- | --- | --- |
+| Hot tier / JPEG XL lossless (median) | 0.419 | 0.414 |
+| All layers / JPEG XL lossless (median) | 0.979 | 0.973 |
+| Exact decodes; pixels outside the bound (steps 1.0 and 2.0) | 10/10; 0 | 10/10; 0 |
+| Worst pixel, step 1.0 (median) | 0.724σ | 0.688σ |
+| Decile bias (median; limit 0.02) | 0.065 | **0.017 (passes)** |
+| File-exact: the original ARW byte for byte (median) | 30.9 MB | 30.3 MB, verified identical 10/10 |
+
+Medians in MB:
+- Hot tier 11.6 (the ARW is 41.2).
+- Every layer 27.6, against JPEG XL lossless 28.3.
+
+Speed (`results/experiments/speed_personal_raws_v2.csv`, Apple M4 Pro, 8 threads, sensor data in memory):
+- MiniRaw, every layer: 1.4 s at effort 7, 0.82 s at effort 4.
+- Hot tier: 0.72 s at effort 4.
+- JPEG XL lossless at effort 7: 1.5 s.
+
+The per-image encode times are not comparable between the two runs (different machine load), so only this
+controlled measurement is reported.
+
 ### Search index (index500b, fresh)
 
 | Arm | Neighbour overlap@10, CLIP | SigLIP | Cosine to full render (median), CLIP / SigLIP |

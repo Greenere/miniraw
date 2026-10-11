@@ -36,7 +36,7 @@ def tiled(planes, fn, packing="P1"):
         return sum(ex.map(lambda a: len(fn(a)), jobs))
 
 
-def methods(raw):
+def methods(raw, fv=2):
     p = raw.planes
     mosaic = io_raw.unpack(p, raw.offsets)
     yield "ZIP / Deflate", "lossless", lambda: len(zlib.compress(mosaic.tobytes(), 6))
@@ -46,9 +46,9 @@ def methods(raw):
             lambda e=e: tiled(p, lambda a: imagecodecs.jpegxl_encode(a, lossless=True, effort=e, numthreads=1), "P3")
     for e in (4, 7):
         yield f"MiniRaw, all layers, effort {e}", "miniraw-lossless", \
-            lambda e=e: len(codec.encode(raw, effort=e, threads=THREADS)[0])
+            lambda e=e: len(codec.encode(raw, effort=e, threads=THREADS, format_version=fv)[0])
         yield f"MiniRaw hot tier, effort {e}", "miniraw-hot", \
-            lambda e=e: len(codec.encode(raw, effort=e, threads=THREADS, with_l3=False)[0])
+            lambda e=e: len(codec.encode(raw, effort=e, threads=THREADS, with_l3=False, format_version=fv)[0])
     yield "JPEG XL lossy, distance 0.1", "lossy", \
         lambda: tiled(p, lambda a: imagecodecs.jpegxl_encode(a, distance=0.1, effort=7, numthreads=1))
     yield "Square-root curve 9-bit + JPEG XL", "lossy", lambda: b5_sqrt_bytes(raw, 9)
@@ -64,22 +64,28 @@ def b5_sqrt_bytes(raw, bits):
     return tiled(q, lambda a: imagecodecs.jpegxl_encode(a, lossless=True, effort=7, numthreads=1), "P3")
 
 
-def main(folder):
+def main(folder, out_name=None, fv=2):
+    """out_name: CSV suffix (default: the folder name); fv: MiniRaw format version to time."""
+    fv = int(fv)
     files = sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in RAW_EXT)
     warm = io_raw.read(files[0])
-    for _, _, fn in methods(warm):
+    for _, _, fn in methods(warm, fv):
         fn()
+    import platform
+    import subprocess
+    cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
+                         text=True).stdout.strip() or platform.processor()
     rows = []
     for f in files:
         raw = io_raw.read(f)
-        for name, kind, fn in methods(raw):
+        for name, kind, fn in methods(raw, fv):
             t = time.perf_counter()
             nbytes = fn()
             rows.append({"file": f.name, "method": name, "kind": kind, "bytes": nbytes,
                          "seconds": time.perf_counter() - t, "npx": raw.planes.size,
-                         "file_bytes": f.stat().st_size, "unc_bytes": raw.planes.size * raw.bit_depth / 8})
+                         "file_bytes": f.stat().st_size, "unc_bytes": raw.planes.size * raw.bit_depth / 8, "cpu": cpu})
         print(f.name, flush=True)
-    out = ROOT / "results" / "experiments" / f"speed_{Path(folder).name}.csv"
+    out = ROOT / "results" / "experiments" / f"speed_{out_name or Path(folder).name}.csv"
     pd.DataFrame(rows).to_csv(out, index=False)
     med = pd.DataFrame(rows).groupby(["method", "kind"])[["bytes", "seconds"]].median().reset_index()
     for _, r in med.sort_values("seconds").iterrows():
@@ -88,4 +94,4 @@ def main(folder):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(*sys.argv[1:4])
