@@ -1,16 +1,33 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "miniraw"
 version = "0.1.0"
-description = "MiniRaw: layered RAW codestream with a noise-calibrated hot tier and an exact cold tier"
+description = "Layered RAW photo codec: a noise-calibrated near-lossless hot tier plus an optional layer for bit-exact recovery"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Greenere" }]
 requires-python = ">=3.11"
+keywords = ["raw", "camera raw", "image compression", "codec", "dng", "jpeg-xl", "photography"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+  "Topic :: System :: Archiving :: Compression",
+]
 dependencies = [
   "numpy", "scipy", "rawpy", "imagecodecs", "constriction", "zstandard", "msgpack",
   "tifffile", "pandas",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Greenere/miniraw"
+Issues = "https://github.com/Greenere/miniraw/issues"
 
 [project.optional-dependencies]
 dev = ["pytest", "matplotlib"]
