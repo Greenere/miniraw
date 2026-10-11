@@ -1,8 +1,8 @@
 # MiniRaw
 
 A layered file format for raw photos: a compact copy accurate to within the sensor's own noise, an optional layer
-that restores every sensor value bit for bit, and a built-in search thumbnail. File format version 2 (the v1.0
-README is archived in [docs/readme_v1.md](docs/readme_v1.md)).
+that restores every sensor value bit for bit, and a built-in search thumbnail. Release v2.0, file format version 2
+(the v1.0 README is archived in [docs/readme_v1.md](docs/readme_v1.md)).
 
 A raw photo is mostly noise, and noise doesn't compress. MiniRaw measures each image's noise, keeps the part of every
 value that rises above it in a **hot tier**, and moves the rest into a **cold layer** that can live on cheaper

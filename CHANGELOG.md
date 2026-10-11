@@ -2,22 +2,63 @@
 
 ## Unreleased
 
-- **Format version 2 (written by default; D29, D30).** v1 files decode bit-identically (checked against a file written by the v1.0.0 release); `encode --format-version 1` writes v1 files; readers reject newer versions. On the fresh `holdout2` split, against format 1 on the same images: hot tier -1.8%, lossless total -1.2% (0.987x JPEG XL lossless), with 0 pixels outside the bound and 60/60 exact decodes (`results/v2_benchmark.md`).
-  - **No L1.** L2 never benefited from it.
-  - **`IDX`:** a 512 px index thumbnail (JPEG XL, about 34 KB) right after the header. `decode --mode preview` writes it.
-  - **`encode --embed [MODEL]`** stores an int8 OpenCLIP embedding of `IDX` in the header (needs the `[index]` extra). Indexing a file then reads one 16 KB header.
-  - **`csafe` reconstruction:** a floor/ceiling checkerboard only in bins where the ceiling keeps the bound. Decile bias -38% with no bound violations.
-- `miniraw info` shows the format version, `IDX` and stored embeddings.
-- D24 (cross-plane prediction) and D25 (production-path efficiency) written up in `results/DEVIATIONS.md`.
-- Benchmark: `configs/v2.toml`, `bench.run --name`, fresh `holdout2` and `index500b` splits, `bench/experiments/v2_compare.py`, and the `IDX` arm in the index benchmark.
-- **Sony A7 IV results under format 2** in the README and `results/v2_benchmark.md`:
-  - Hot tier 11.6 MB (-72% against the ARW); every layer 27.6 MB, 2.5% under JPEG XL lossless.
-  - File-exact 30.3 MB, with all 10 ARWs restored byte for byte.
-  - The bias check passes on this camera (0.017).
-  - New: `bench/experiments/file_exact.py`.
-  - `speed_chart_data` takes an output name and format version and records the CPU.
-  - `readme_charts` takes `--extra` and `--prefix` and counts IDX.
+## v2.0.0 (2026-10-11)
+
+File format version 2: smaller, and searchable. **Format promise:** files written by v1.0.0 and by v2.0.0 with
+default settings decode bit-identically in every later version. A v1.0.0 file is kept as a test fixture
+(`tests/data`). `encode --format-version 1` still writes files that v1.0 readers decode, and readers now reject
+format versions newer than they know.
+
+### Format (D29, D30)
+- **No L1.** L2 was 0.8-3.6% larger with the base layer than without it in every variant tested, so format 2 drops it.
+- **`IDX` index thumbnail.**
+  - What: a 512 px image rendered from the full sensor data, JPEG XL at distance 1.0 (about 34 KB), placed right after the header.
+  - `decode --mode preview` writes it.
+- **Search embedding.**
+  - `encode --embed [MODEL]` stores an int8 OpenCLIP embedding of `IDX` in the header (512 bytes for ViT-B/32; needs the `[index]` extra).
+  - Indexing a file then reads one 16 KB header; re-indexing with another model reads about 51 KB.
+- **`csafe` reconstruction.** Signal mode alternates floor and ceiling on a pixel checkerboard only in bins where the ceiling keeps the error bound. The bias drops by about 40% with no bound violations.
+
+### Tools
+- `miniraw info` shows the format version, the `IDX` thumbnail and stored embeddings.
+- `bench.eval` counts `IDX` in the hot tier.
+
+### Benchmarks and documents
+- **`results/v2_benchmark.md`:** format 2 against format 1 on the same images, with the design frozen before the confirmation runs.
+- **Fresh `holdout2` and `index500b` splits.**
+- **D24, D25, D29 and D30** in `results/DEVIATIONS.md`; `docs/METHOD.md` and `docs/v2_advancement.md` updated.
+- **README:**
+  - A new README for format 2, with FiveK and Sony A7 IV charts.
+  - The v1.0 README is archived as `docs/readme_v1.md`.
+- **Benchmark tooling:**
+  - `configs/v2.toml` and `bench.run --name`.
+  - Experiments: `v2_compare.py`, `file_exact.py`, and an `IDX` arm in the index benchmark.
+  - Chart tools take output names, so format 1 and format 2 charts coexist.
 - `.gitignore` ignores only the top-level `data/`, so `tests/data` fixtures are tracked.
+
+### Measured
+- **FiveK `holdout2`, 60 images first used here (37 linear, 14 cameras), against format 1 on the same images:**
+  - Hot tier -1.8% [-2.0, -1.5]: 0.415x JPEG XL lossless, 0.37x the camera file.
+  - Every layer -1.2%: 0.987x JPEG XL lossless (format 1 tied it).
+  - 60/60 exact decodes; no pixel outside the bound at steps 1.0 or 2.0.
+  - Decile bias 0.102 to 0.063.
+- **Search, `index500b`, 493 images first used here:**
+  - Neighbour overlap@10 of `IDX` embeddings with a full render: 0.84 (CLIP) and 0.86 (SigLIP), against 0.76 for format 1's L1 and 0.67-0.69 for the camera's embedded thumbnail.
+  - Zero-shot accuracy within 1 point of the full render.
+- **Sony A7 IV, 10 files (the tuning set):**
+  - Hot tier 11.6 MB against the 41.2 MB ARW (-72%).
+  - Every layer 27.6 MB, 2.5% under JPEG XL lossless.
+  - File-exact 30.3 MB, with all 10 ARWs restored byte for byte.
+  - The decile bias check passes (0.017).
+  - Lossless encode at effort 7: 1.4 s, against JPEG XL's 1.5 s (Apple M4 Pro).
+
+### Known limitations
+- `IDX` misses the plan's 0.90 neighbour-overlap bar (0.84-0.86); compressing the thumbnail costs about 0.07.
+- The per-decile bias check (0.02σ) still fails on the FiveK cameras (median 0.06). The remainder comes from uneven pixel density inside bins, which the error bound prevents reconstruction from following.
+- 2x2 Bayer sensors only. Byte-exact restore of the original file only for lossless-JPEG-tiled raws (Sony ARW lossless, lossless DNG).
+- Held-out cameras are 2003-2009 models; the noise estimate can run high on textured, low-noise images.
+- Pure Python with NumPy, JPEG XL and a range coder.
+
 ## v1.0.0 (2026-10-11)
 
 The first stable release. **Format promise:** files written by v1.0.0 with default settings decode bit-identically
