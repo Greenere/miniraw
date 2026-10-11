@@ -17,7 +17,7 @@ Decode modes: `index` (L0), `preview` (L0+L1), `signal` (L0..L2, error bounded b
 These are measured on 10 photos from a Sony A7 IV (33 MP, 14-bit, lossless-compressed ARW). Each figure is the
 median over the 10 files.
 
-- **Hot tier (L0-L2): 11.5 MB per photo, 72% smaller than the 41.2 MB ARW.** No pixel is off by more than 0.61x
+- **Hot tier (L0-L2): 11.7 MB per photo, 72% smaller than the 41.2 MB ARW.** No pixel is off by more than 0.72x
   the sensor's own noise at that brightness.
 - **Every layer together: 27.7 MB, sensor-exact** (every sensor value bit for bit). That is 33% smaller than the
   ARW and 2% smaller than JPEG XL lossless (28.3 MB, also sensor-only), so keeping the exact data costs nothing
@@ -28,11 +28,11 @@ median over the 10 files.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/size_dark.svg">
-  <img alt="Bar chart of median size per photo. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.7 MB (bit-exact); MiniRaw hot tier 11.5 MB at step 1.0 and 9.5 MB at step 1.5." src="docs/img/size_light.svg">
+  <img alt="Bar chart of median size per photo. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.7 MB (bit-exact); MiniRaw hot tier 11.7 MB at step 1.0 and 9.7 MB at step 1.5." src="docs/img/size_light.svg">
 </picture>
 
 The step size trades hot-tier size against error. It also affects the lossless total: smaller steps shrink the
-full bit-exact file further, but make the hot tier larger (about 30% at `--step 0.5`). The default, 1.0, favours
+full bit-exact file further, but make the hot tier larger (about 33% at `--step 0.5`). The default, 1.0, favours
 the hot tier.
 
 For a smaller file, the step trades size against error. In the chart below, error is in units of the sensor's own
@@ -40,35 +40,35 @@ noise (sigma) at each pixel's brightness, so 1 sigma is "as large as the noise a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/quality_dark.svg">
-  <img alt="Two line charts of error against size per photo. Worst-case error: MiniRaw stays between 0.4 and 1.1 sigma from 8 to 15 MB; a fixed square-root curve needs 15 to 19 MB to get below 1.3 sigma and reaches 2.3 sigma at 10.8 MB; JPEG XL lossy is above 6 sigma at every size. Average error: MiniRaw and the square-root curve overlap; JPEG XL lossy is higher." src="docs/img/quality_light.svg">
+  <img alt="Two line charts of error against size per photo. Worst-case error: MiniRaw stays between 0.4 and 1.1 sigma from 8.5 to 15.6 MB; a fixed square-root curve needs 19 MB to get below 1.3 sigma and reaches 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20% below the square-root curve at the same size; JPEG XL lossy is higher." src="docs/img/quality_light.svg">
 </picture>
 
 How to read the size-versus-error chart:
 
 - **Worst-case error is where MiniRaw differs.** MiniRaw fits the noise level for each sensor and brightness, so
-  at 9.5 MB no pixel errs by more than 0.86 sigma. At a similar 10.8 MB, a fixed square-root curve (the
-  approach of in-camera lossy raw modes) reaches 2.35 sigma, in the shadows and highlights where the curve
-  doesn't match the sensor. At 12.6 MB, JPEG XL lossy reaches 6.5 sigma; it is tuned for how displayed images
+  at 9.7 MB no pixel errs by more than 0.91 sigma. At a similar 10.8 MB, a fixed square-root curve (the
+  approach of in-camera lossy raw modes) reaches 5.0 sigma, in the shadows and highlights where the curve
+  doesn't match the sensor. At 12.6 MB, JPEG XL lossy reaches 10.8 sigma; it is tuned for how displayed images
   look, not for raw data that will be pushed and graded.
-- **Average error is a tie with the square-root curve.** The saving comes from not storing noise. Calibration
-  adds a guarantee for every pixel, not a smaller average.
+- **Average error is about 20% lower than the square-root curve's at the same size.** Most of the saving comes
+  from not storing noise; calibration mainly adds a guarantee for every pixel.
 
 Encode speed matters as much as size for day-to-day use:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/speed_dark.svg">
-  <img alt="Two scatter charts of encode time against size. Lossless: JPEG-LS 28.8 MB in 0.15 s; JPEG XL effort 4 29.2 MB in 0.8 s; MiniRaw effort 4 28.1 MB in 1.7 s; MiniRaw effort 7 27.7 MB in 3.4 s; JPEG XL effort 7 28.3 MB in 4.5 s; ZIP 47.5 MB in 2.4 s. Near-lossless and lossy: MiniRaw hot tier 11.9 MB in 1.4 s (effort 4) and 11.5 MB in 3.1 s (effort 7), worst pixel 0.6 sigma; square-root curve 10.8 MB in 3.0 s, worst 2.3 sigma; JPEG XL lossy 7.7 MB in 2.9 s, worst 8.8 sigma." src="docs/img/speed_light.svg">
+  <img alt="Two scatter charts of encode time against size. Lossless: JPEG-LS 28.8 MB in 0.13 s; JPEG XL effort 4 29.2 MB in 0.65 s; MiniRaw effort 4 28.1 MB in 1.3 s; MiniRaw effort 7 27.7 MB in 2.6 s; JPEG XL effort 7 28.3 MB in 3.3 s; ZIP 47.5 MB in 2.3 s. Near-lossless and lossy: MiniRaw hot tier 12.1 MB in 1.1 s (effort 4) and 11.7 MB in 2.5 s (effort 7), worst pixel 0.7 sigma; square-root curve 10.8 MB in 2.3 s, worst 5.0 sigma; JPEG XL lossy 7.7 MB in 2.0 s, worst 12.8 sigma." src="docs/img/speed_light.svg">
 </picture>
 
 - **Lossless.**
-  - At effort 7, MiniRaw is smaller *and* faster than JPEG XL lossless: 27.7 MB in 3.4 s against 28.3 MB in
-    4.5 s. JPEG XL finds MiniRaw's prediction residuals cheaper to model than raw pixels, and the exact layer
+  - At effort 7, MiniRaw is smaller *and* faster than JPEG XL lossless: 27.7 MB in 2.6 s against 28.3 MB in
+    3.3 s. JPEG XL finds MiniRaw's prediction residuals cheaper to model than raw pixels, and the exact layer
     is range-coded.
-  - At the default effort 4, MiniRaw takes 1.7 s for 28.1 MB.
-  - JPEG-LS is the fastest lossless option (0.15 s) and about 4% larger.
+  - At the default effort 4, MiniRaw takes 1.3 s for 28.1 MB.
+  - JPEG-LS is the fastest lossless option (0.13 s) and about 4% larger.
 - **Near-lossless.**
-  - MiniRaw's hot tier encodes in 1.4 s (effort 4) and keeps every pixel within the sensor noise.
-  - The lossy methods reach similar or smaller sizes in about 3 s, but their worst pixels are 2-9x the noise.
+  - MiniRaw's hot tier encodes in 1.1 s (effort 4) and keeps every pixel within the sensor noise.
+  - The lossy methods reach similar or smaller sizes in about 2 s, but their worst pixels are 5-13x the noise.
 
 Timing: Apple M1, from sensor data already in memory, so reading the file and decoding the raw are excluded.
 Tiled codecs encode the four Bayer planes in 512-pixel tiles on 8 threads, as MiniRaw does. ZIP is

@@ -1,0 +1,21 @@
+DSC02666.ARW
+DSC03179.ARW
+DSC03393.ARW
+DSC04227.ARW
+DSC04475.ARW
+DSC04565.ARW
+DSC04574.ARW
+DSC04659.ARW
+DSC04664.ARW
+DSC04818.ARW
+  JPEG-LS lossless                         0.13 s     28.8 MB
+  JPEG XL lossless, effort 4               0.65 s     29.2 MB
+  MiniRaw hot tier, effort 4               1.13 s     12.1 MB
+  MiniRaw, all layers, effort 4            1.29 s     28.1 MB
+  JPEG XL lossy, distance 0.1              1.99 s      7.7 MB
+  ZIP / Deflate                            2.32 s     47.5 MB
+  Square-root curve 9-bit + JPEG XL        2.35 s     10.8 MB
+  MiniRaw hot tier, effort 7               2.48 s     11.7 MB
+  MiniRaw, all layers, effort 7            2.61 s     27.7 MB
+  JPEG XL lossless, effort 7               3.25 s     28.3 MB
+wrote /Users/haoyangli/projects/miniraw/results/experiments/speed_personal_raws.csv
