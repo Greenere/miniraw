@@ -1,0 +1,287 @@
+"""Bundle a folder into one zip, compressing photos first; unbundle it again.
+
+Raw (2x2 Bayer) files become .mraw members; JPEGs are repacked losslessly with
+JPEG XL (restorable byte for byte); with png="repack", PNGs without colour or
+text metadata are stored as lossless JPEG XL and restored with identical pixels
+(the PNG file bytes differ). Everything else is stored as-is. A
+manifest.json inside the zip records each file's original path, size, SHA-256
+and modification time, so unbundling can verify and restore every file.
+
+Raw files come back as DNG with bit-exact sensor data, not as the original
+proprietary file bytes (ARW, NEF, CR3 ... embed maker notes, previews and
+camera-specific compression that are not stored).
+"""
+import hashlib
+import json
+import os
+import time
+import zipfile
+from pathlib import Path, PurePosixPath
+
+from . import __version__, codec, container, export, io_raw
+
+MANIFEST = "manifest.json"
+FORMAT = "miniraw-bundle/1"
+RAW_EXT = {".dng", ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2",
+           ".pef", ".srw", ".iiq", ".3fr", ".erf", ".kdc", ".mrw", ".x3f"}
+JPEG_EXT = {".jpg", ".jpeg"}
+# PNG chunks that carry only pixels; any other chunk (iCCP, gAMA, tEXt, ...) would be lost by a repack
+PNG_PLAIN_CHUNKS = {b"IHDR", b"IDAT", b"IEND"}
+SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+# Already-compressed formats: storing beats deflating them again.
+STORE_EXT = {".mraw", ".jxl", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".avif", ".webp", ".gif", ".mp4",
+             ".mov", ".m4v", ".mkv", ".avi", ".mp3", ".m4a", ".aac", ".zip", ".gz", ".7z", ".xz"} | RAW_EXT
+
+
+def _sha256(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def _zipinfo(name, mtime, ext):
+    zi = zipfile.ZipInfo(name, time.localtime(max(mtime, 315532800))[:6])
+    zi.compress_type = zipfile.ZIP_STORED if ext in STORE_EXT else zipfile.ZIP_DEFLATED
+    zi.external_attr = 0o644 << 16
+    return zi
+
+
+def _walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not os.path.islink(os.path.join(dirpath, d)))
+        for f in sorted(filenames):
+            p = Path(dirpath) / f
+            if f in SKIP_NAMES or p.is_symlink() or not p.is_file():
+                continue
+            yield p
+
+
+def _repack_jpeg(data):
+    """Lossless JPEG XL repack, verified to restore the identical bytes; None if not possible."""
+    import imagecodecs
+    try:
+        jxl = bytes(imagecodecs.jpegxl_encode_jpeg(data))
+        if bytes(imagecodecs.jpegxl_decode_jpeg(jxl)) == data and len(jxl) < len(data):
+            return jxl
+    except Exception:
+        pass
+    return None
+
+
+def _png_chunks(data):
+    i, out = 8, set()
+    while i + 8 <= len(data):
+        n = int.from_bytes(data[i:i + 4], "big")
+        out.add(data[i + 4:i + 8])
+        i += 12 + n
+    return out
+
+
+def _pixel_sha(arr):
+    return hashlib.sha256(f"{arr.shape}{arr.dtype.str}".encode() + arr.tobytes()).hexdigest()
+
+
+def _repack_png(data):
+    """Lossless JPEG XL of a metadata-free PNG, verified pixel-identical; (jxl, pixel hash) or None."""
+    import imagecodecs
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or not _png_chunks(data) <= PNG_PLAIN_CHUNKS:
+        return None
+    try:
+        px = imagecodecs.png_decode(data)
+        jxl = bytes(imagecodecs.jpegxl_encode(px, lossless=True, effort=7))
+        back = imagecodecs.jpegxl_decode(jxl)
+        if back.dtype == px.dtype and back.shape == px.shape and (back == px).all() and len(jxl) < len(data):
+            return jxl, _pixel_sha(px)
+    except Exception:
+        pass
+    return None
+
+
+def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=None, log=print, png="store"):
+    """Bundle folder `src` into zip `dst`. cold: keep | split (L3 to <dst>.l3.zip) | drop."""
+    src, dst = Path(src), Path(dst)
+    if not src.is_dir():
+        raise NotADirectoryError(src)
+    files = [p for p in _walk(src) if p.resolve() != dst.resolve()]
+    l3_path = dst.with_name(dst.name[:-4] + ".l3.zip" if dst.name.endswith(".zip") else dst.name + ".l3.zip")
+    tmp, tmp_l3 = dst.with_name(dst.name + ".part"), l3_path.with_name(l3_path.name + ".part")
+    entries, t0 = [], time.perf_counter()
+    total_in = total_out = total_l3 = 0
+    with zipfile.ZipFile(tmp, "w", allowZip64=True) as zf, \
+            (zipfile.ZipFile(tmp_l3, "w", allowZip64=True) if cold == "split" else _Null()) as zl3:
+        for i, p in enumerate(files, 1):
+            rel = PurePosixPath(p.relative_to(src).as_posix())
+            data = p.read_bytes()
+            st = p.stat()
+            ext = p.suffix.lower()
+            e = {"path": str(rel), "size": len(data), "sha256": _sha256(data), "mtime": st.st_mtime}
+            payload, note = None, ""
+            if ext in RAW_EXT:
+                try:
+                    raw = io_raw.read(p)
+                    mr, _ = codec.encode(raw, step=step, effort=effort, threads=threads,
+                                         with_l3=cold != "drop", source={"file": p.name})
+                    hdr = container.RangeReader(mr).header
+                    e.update(kind="raw", member=f"{rel}.mraw", mosaic_sha256=hdr["source"]["sha256"],
+                             step=step, exact=cold != "drop")
+                    if cold == "split":
+                        mr, l3 = container.strip(mr)
+                        zl3.writestr(_zipinfo(f"{rel}.mraw.l3", st.st_mtime, ".mraw"), l3)
+                        e["l3_member"] = f"{rel}.mraw.l3"
+                        total_l3 += len(l3)
+                    payload = mr
+                    note = "raw, bit-exact" if cold == "keep" else ("raw, L3 split off" if cold == "split"
+                                                                     else "raw, near-lossless")
+                except io_raw.NotBayer as err:
+                    note = f"raw stored as-is (not 2x2 Bayer: {err})"
+                except Exception as err:  # unreadable or unsupported raw: keep the original
+                    note = f"raw stored as-is ({type(err).__name__}: {err})"
+            elif ext in JPEG_EXT and jpeg == "repack":
+                jxl = _repack_jpeg(data)
+                if jxl is not None:
+                    e.update(kind="jpeg-jxl", member=f"{rel}.jxl")
+                    payload, note = jxl, "JPEG, lossless repack"
+                else:
+                    note = "JPEG stored as-is (repack not smaller or not supported)"
+            elif ext == ".png" and png == "repack":
+                r = _repack_png(data)
+                if r is not None:
+                    e.update(kind="png-jxl", member=f"{rel}.jxl", pixel_sha256=r[1])
+                    payload, note = r[0], "PNG, lossless repack (pixel-identical)"
+                else:
+                    note = "PNG stored as-is (has colour/text metadata, or repack not smaller)"
+            if payload is None:
+                e.update(kind="file", member=str(rel))
+                payload = data
+            zf.writestr(_zipinfo(e["member"], st.st_mtime, PurePosixPath(e["member"]).suffix.lower()), payload)
+            e["stored_size"] = len(payload)
+            entries.append(e)
+            total_in += len(data)
+            total_out += len(payload)
+            log(f"[{i}/{len(files)}] {rel}  {len(data) / 1e6:.1f} MB -> {len(payload) / 1e6:.1f} MB"
+                + (f"  ({note})" if note else ""))
+        manifest = {"format": FORMAT, "miniraw": __version__, "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "settings": {"step": step, "effort": effort, "cold": cold, "jpeg": jpeg, "png": png},
+                    "files": entries}
+        zf.writestr(_zipinfo(MANIFEST, time.time(), ".json"), json.dumps(manifest, indent=1))
+    tmp.replace(dst)
+    if cold == "split":
+        tmp_l3.replace(l3_path)
+    dt = time.perf_counter() - t0
+    size = dst.stat().st_size
+    log(f"\n{len(files)} files, {total_in / 1e6:.1f} MB -> {size / 1e6:.1f} MB "
+        f"({(1 - size / max(total_in, 1)) * 100:.0f}% smaller) in {dt:.1f} s: {dst}")
+    if cold == "split":
+        log(f"cold layer (needed for bit-exact raws): {l3_path.stat().st_size / 1e6:.1f} MB -> {l3_path}")
+    return manifest
+
+
+class _Null:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *a):
+        return False
+
+
+def read_manifest(zf):
+    m = json.loads(zf.read(MANIFEST))
+    if m.get("format") != FORMAT:
+        raise ValueError(f"not a MiniRaw bundle (format {m.get('format')!r})")
+    return m
+
+
+def _safe_target(root, rel):
+    target = (root / rel).resolve()
+    if root.resolve() not in target.parents and target != root.resolve():
+        raise ValueError(f"unsafe path in bundle: {rel}")
+    return target
+
+
+def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop):
+    """Extract bundle `src` into folder `dst`. raw_as: dng | jpg | png | tif | mraw.
+
+    l3: the split-off <bundle>.l3.zip (looked up next to the bundle when not given).
+    """
+    src, dst = Path(src), Path(dst)
+    t0 = time.perf_counter()
+    if l3 is None:
+        cand = src.with_name(src.name[:-4] + ".l3.zip" if src.name.endswith(".zip") else src.name + ".l3.zip")
+        l3 = cand if cand.exists() else None
+    stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0}
+    with zipfile.ZipFile(src) as zf, (zipfile.ZipFile(l3) if l3 else _Null()) as zl3:
+        m = read_manifest(zf)
+        files = m["files"]
+        for i, e in enumerate(files, 1):
+            rel = PurePosixPath(e["path"])
+            out = _safe_target(dst, rel)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            payload = zf.read(e["member"])
+            if e["kind"] == "raw":
+                sidecar = None
+                if e.get("l3_member") and zl3 is not None:
+                    sidecar = zl3.read(e["l3_member"])
+                if raw_as == "mraw":
+                    out = out.with_name(out.name + ".mraw")
+                    out.write_bytes(payload)
+                    if sidecar:
+                        out.with_name(out.name + ".l3").write_bytes(sidecar)
+                    note = "mraw"
+                else:
+                    reader = container.RangeReader(payload, sidecar)
+                    dec = codec.Decoder(reader, threads)
+                    exact = reader.has_l3
+                    mode = "exact" if exact and raw_as == "dng" else "signal"
+                    mosaic = dec.mosaic(mode)
+                    out = out.with_suffix("." + raw_as)
+                    sibling = str(rel.with_suffix("." + raw_as))
+                    if out.exists() or any(f is not e and f["path"] == sibling for f in files):
+                        out = out.with_name(rel.name + "." + raw_as)   # avoid clobbering a sibling
+                    if raw_as == "dng":
+                        if mode == "exact":
+                            ok = _sha256(mosaic.astype("<u2").tobytes()) == e["mosaic_sha256"]
+                            if not ok:
+                                raise ValueError(f"{rel}: decoded sensor data does not match the bundle's hash")
+                            stats["verified"] += 1
+                        out.write_bytes(export.dng_bytes(mosaic, reader.header, compress=True))
+                    else:
+                        rgb = export.develop(mosaic, reader.header, **develop)
+                        export.save_image(out, rgb, reader.header)
+                    stats["raw_exact" if mode == "exact" else "raw_signal"] += 1
+                    note = ("DNG, bit-exact sensor data" if mode == "exact" else
+                            "DNG, near-lossless (no L3)" if raw_as == "dng" else f"developed {raw_as.upper()}")
+            elif e["kind"] == "png-jxl":
+                import imagecodecs
+                px = imagecodecs.jpegxl_decode(payload)
+                if _pixel_sha(px) != e["pixel_sha256"]:
+                    raise ValueError(f"{rel}: restored pixels do not match the original PNG")
+                stats["verified"] += 1
+                out.write_bytes(imagecodecs.png_encode(px))
+                note = "PNG, pixel-identical"
+            else:
+                if e["kind"] == "jpeg-jxl":
+                    import imagecodecs
+                    payload = bytes(imagecodecs.jpegxl_decode_jpeg(payload))
+                if _sha256(payload) != e["sha256"]:
+                    raise ValueError(f"{rel}: restored bytes do not match the original's SHA-256")
+                stats["verified"] += 1
+                out.write_bytes(payload)
+                note = "byte-identical"
+            os.utime(out, (e["mtime"], e["mtime"]))
+            stats["files"] += 1
+            log(f"[{i}/{len(files)}] {out.relative_to(dst)}  ({note})")
+    log(f"\n{stats['files']} files restored to {dst} in {time.perf_counter() - t0:.1f} s; "
+        f"{stats['verified']} verified against the original hashes")
+    if stats["raw_signal"] and raw_as == "dng":
+        log(f"note: {stats['raw_signal']} raw file(s) restored near-lossless because their L3 layer is missing "
+            f"(bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")
+    return stats
+
+
+def list_bundle(src, log=print):
+    with zipfile.ZipFile(src) as zf:
+        m = read_manifest(zf)
+        orig = sum(e["size"] for e in m["files"])
+        log(f"{src}: {len(m['files'])} files, created {m['created']} by MiniRaw {m['miniraw']}, "
+            f"settings {m['settings']}")
+        for e in m["files"]:
+            log(f"  {e['path']:50s} {e['size'] / 1e6:8.1f} MB -> {e['stored_size'] / 1e6:7.1f} MB  {e['kind']}")
+        log(f"  total {orig / 1e6:.1f} MB -> {Path(src).stat().st_size / 1e6:.1f} MB")

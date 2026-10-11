@@ -61,7 +61,7 @@ def _signal_quality(raw, data, info, step, prefix):
     return row, sig
 
 
-RAW_EXT = {".dng", ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".pef", ".srw", ".iiq", ".3fr", ".erf", ".kdc", ".mrw", ".x3f"}
+from miniraw.bundle import RAW_EXT  # noqa: E402
 
 
 def run_image(key, cfg, split, path=None, quick=False):

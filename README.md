@@ -98,6 +98,41 @@ white balance, black and white levels, default crop, orientation and capture EXI
 It reproduces the sensor data exactly, not the original file's bytes: proprietary containers (ARW, NEF, CR3)
 also hold maker notes, previews and camera-specific compression, which are not stored.
 
+## Bundle a whole folder
+
+```sh
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip                 # everything restorable exactly
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold split    # trip.zip (hot) + trip.l3.zip (cold)
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold drop     # near-lossless raws only, smallest
+miniraw unbundle trip.zip restored/                              # raws come back as DNG
+miniraw unbundle trip.zip previews/ --raw-as jpg                 # or as developed JPEGs
+miniraw unbundle trip.zip --list
+```
+
+`bundle` walks the folder, keeps its structure, and writes one zip:
+
+| In the folder | In the bundle | Restored as |
+|---|---|---|
+| Raw files (2x2 Bayer: ARW, NEF, CR2/CR3, DNG, ...) | `.mraw` | DNG with bit-exact sensor data (or `--raw-as jpg/png/tif/mraw`) |
+| JPEG | lossless JPEG XL repack, about 21% smaller | the identical JPEG, byte for byte |
+| PNG | stored; or lossless JPEG XL with `--png repack`, about 42% smaller | identical bytes; or identical pixels (only PNGs without colour or text metadata are repacked) |
+| Anything else (sidecars, video, X-Trans raws, ...) | stored as-is | the identical file |
+
+A `manifest.json` in the zip records every file's path, size, SHA-256 and modification time. `unbundle` checks each
+restored file against it and restores the modification times. On 10 Sony A7 IV RAW+JPEG pairs, the 456 MB folder
+became a 322 MB bundle that restores exactly. With `--cold split` it became a 153 MB hot zip plus a 169 MB cold
+zip; the cold zip is only needed for bit-exact raws.
+
+Raw files are restored as DNG, not as the original ARW/NEF/CR3 bytes. Those formats wrap the sensor data in maker
+notes, embedded previews and camera-specific compression that the bundle doesn't keep, so a restored folder of
+DNGs can be larger than the original raws.
+
+**Why JPEG and PNG don't get MiniRaw's treatment.** MiniRaw saves space by not storing the random sensor noise in
+linear raw data. By the time a photo is a JPEG or PNG, it has been demosaiced, denoised, tone-curved and rounded
+to 8 bits, and the remaining noise is smaller than one 8-bit step, so there is nothing to drop. Measured on 16
+JPEGs, applying the method gave files 4x larger than the original JPEG. Lossless JPEG XL repacking is the right
+tool for those files, and the bundle uses it (`bench/experiments/jpeg_png.py`).
+
 ## Try it on your own raw file
 
 ```sh

@@ -6,6 +6,9 @@
     miniraw info IN.mraw
     miniraw strip IN.mraw
     miniraw split IN.mraw
+    miniraw bundle DIR OUT.zip [--cold keep|split|drop] [--step 1.0] [--effort 4] [--jpeg repack|store]
+                   [--png store|repack]
+    miniraw unbundle IN.zip OUTDIR [--raw-as dng|jpg|png|tif|mraw] [--l3 IN.l3.zip] | --list
 """
 import argparse
 import json
@@ -45,6 +48,28 @@ def main(argv=None):
     d.add_argument("--uncompressed", action="store_true", help="DNG: write uncompressed instead of lossless JPEG")
     for name in ("info", "strip", "split"):
         sub.add_parser(name).add_argument("src")
+    b = sub.add_parser("bundle", help="compress a folder into one zip: raws -> .mraw, JPEGs repacked losslessly")
+    b.add_argument("src", help="folder to bundle (subfolders included)")
+    b.add_argument("dst", help="output .zip")
+    b.add_argument("--cold", choices=["keep", "split", "drop"], default="keep",
+                   help="bit-exact layer L3: keep in the zip (default), split into OUT.l3.zip, or drop "
+                        "(near-lossless raws, ~55%% smaller)")
+    b.add_argument("--step", type=float, default=1.0)
+    b.add_argument("--effort", type=int, default=4)
+    b.add_argument("--jpeg", choices=["repack", "store"], default="repack",
+                   help="repack JPEGs losslessly with JPEG XL (byte-exact restore) or store them as-is")
+    b.add_argument("--png", choices=["store", "repack"], default="store",
+                   help="repack metadata-free PNGs as lossless JPEG XL (~40%% smaller; restored with identical "
+                        "pixels, but not the identical PNG file bytes)")
+    b.add_argument("--threads", type=int)
+    u = sub.add_parser("unbundle", help="restore a bundle into a folder")
+    u.add_argument("src", help="bundle .zip")
+    u.add_argument("dst", nargs="?", help="output folder")
+    u.add_argument("--list", action="store_true", help="list the bundle's contents and exit")
+    u.add_argument("--raw-as", choices=["dng", "jpg", "png", "tif", "mraw"], default="dng",
+                   help="restore raws as DNG (bit-exact sensor data, default), developed images, or .mraw")
+    u.add_argument("--l3", help="the split-off .l3.zip (default: looked up next to the bundle)")
+    u.add_argument("--threads", type=int)
     a = ap.parse_args(argv)
 
     if a.cmd == "encode":
@@ -55,6 +80,16 @@ def main(argv=None):
         _print_info(data)
     elif a.cmd == "decode":
         _decode(a)
+    elif a.cmd == "bundle":
+        from . import bundle
+        bundle.bundle(a.src, a.dst, a.step, a.effort, a.cold, a.jpeg, a.threads, png=a.png)
+    elif a.cmd == "unbundle":
+        from . import bundle
+        if a.list:
+            return bundle.list_bundle(a.src)
+        if not a.dst:
+            sys.exit("unbundle needs an output folder (or --list)")
+        bundle.unbundle(a.src, a.dst, a.raw_as, a.l3, a.threads)
     elif a.cmd == "info":
         _print_info(Path(a.src).read_bytes())
     elif a.cmd in ("strip", "split"):

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **`miniraw bundle DIR OUT.zip` / `miniraw unbundle IN.zip DIR`.**
+  - Raws are encoded to `.mraw`, JPEGs repacked losslessly with JPEG XL (byte-exact), and PNGs optionally repacked (pixel-exact); everything else is stored.
+  - `--cold keep|split|drop` controls the bit-exact layer.
+  - A manifest verifies every restored file against its original SHA-256 and restores modification times.
+  - `--list` shows what a bundle holds.
+
 ## v0.1.0 (2026-10-10), pre-release
 
 The first public release: a working Phase 1 prototype of the format and tools. The file format may change before v1.0.
