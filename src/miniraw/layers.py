@@ -145,11 +145,19 @@ def _neighbour_sum(src, src_off, dst_off):
     return acc, n
 
 
-def cross_predict(p, q, up, offsets):
-    """Integer prediction of plane p for one tile from already-decoded planes q and up(L1)."""
+def l1_dequantize(stored, step):
+    """L1 as used for prediction and preview from its stored form floor(L1 / step): the centre of each step."""
+    return stored if step == 1 else stored * step + step // 2
+
+
+def cross_predict(p, q, up, offsets, g1_from_l1=True):
+    """Integer prediction of plane p for one tile from already-decoded planes q and up(L1).
+
+    g1_from_l1=False codes G1 directly (no prediction) and keeps L1 for the colour-difference terms only.
+    """
     G1, G2 = 1, 2
     if p == G1:
-        return up[G1]
+        return up[G1] if g1_from_l1 else np.zeros_like(up[G1])
     if p == G2:
         s, n = _neighbour_sum(q[G1], offsets[G1], offsets[G2])
         return (s + n * (up[G2] - up[G1]) + n // 2) // n

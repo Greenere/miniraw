@@ -224,6 +224,12 @@ def _print_info(data):
     for i, m in enumerate(hd["noise"]["planes"]):
         print(f"  plane {io_raw.PLANE_NAMES[i]}: {m['type']}" +
               (f" a={m['a']:.3f} c={m['c']:.2f}" if m["type"] == "affine" else ""))
+    st = hd.get("stats")
+    if st:
+        f = lambda v, fmt: "n/a" if v is None else format(v, fmt)  # noqa: E731
+        print(f"  SNR at 18% grey {f(st['snr18'], '.1f')}  "
+              f"clipped {f(st['clipped_frac'], '.3%')}  mean level {f(st['mean_level'], '.3f')}  "
+              f"log-mean level {f(st['log_mean'], '.4f')}")
 
 
 def _jsonable(o):

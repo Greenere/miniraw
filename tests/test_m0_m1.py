@@ -95,3 +95,26 @@ def test_bound_holds_at_large_steps(step):
     fwd = vst.forward_table(T, step, 15600)
     n, rec = vst.tables_from_lo(vst.lo_from_forward(fwd), 16383)
     assert vst.bound_check(T, fwd, rec, step).max() <= 1e-9
+
+
+def test_header_stats_match_known_noise(synth_image):
+    """stats.snr18 follows from the noise model relative to full scale (D28)."""
+    from miniraw import container, stats
+    model = {"type": "affine", "a": 2.0, "b": float(synth.B), "c": 16.0}
+    st = stats.technical(synth_image, [model] * 4)
+    full = synth.WHITE - synth.B
+    assert st["snr18"] == pytest.approx(0.18 * full / np.sqrt(2.0 * 0.18 * full + 16.0), rel=1e-3)
+    assert 0 <= st["clipped_frac"] < 1 and 0 < st["log_mean"] <= st["mean_level"] < 1
+    data, _ = codec.encode(synth_image, step=1.0, tile=256)
+    hd = container.RangeReader(data).header
+    assert hd["stats"]["snr18"] is not None and len(hd["stats"]["snr18_planes"]) == 4
+    assert len(data) - sum(container.layer_sizes(hd).values()) < 8192     # header stays under its 8 KB target
+
+
+def test_header_stats_lossless_fallback_plane():
+    from miniraw import stats
+    rng = np.random.default_rng(1)
+    planes = rng.integers(0, 3, (4, 64, 64)).astype(np.uint16)
+    img = io_raw.RawImage(planes, OFFSETS, [0] * 4, 4095, 12)
+    st = stats.technical(img, [noise.lossless_model(0, 4095)] * 4)
+    assert st["snr18"] is None and st["clipped_frac"] == 0

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from . import container, entropy, io_raw, layers, noise, vst
+from . import stats as stats_mod
 
 def mosaic_sha256(planes, offsets, rows=256):
     """SHA-256 of the mosaic in raster order (little-endian uint16), hashed in row strips."""
@@ -98,7 +99,7 @@ def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnos
 def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
            with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None,
            packing=None, l1_min_side=128, threads=None, diagnostics=False, keep_original=False,
-           l2_pred="cross"):
+           l2_pred="cross", l1_step=1, g1_pred="l1"):
     """Encode a RawImage. `models` (per-plane noise model dicts) skips estimation.
 
     l1_mode "mean" is construction A (floor-mean L1, L2 codes q - up(L1));
@@ -133,6 +134,10 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     with ThreadPoolExecutor(threads or default_threads()) as ex:
         st = list(ex.map(lambda p: _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics),
                          range(4)))
+        if use_l1 and l1_mode == "mean" and l1_step > 1:     # store L1 coarser; predict from what is stored
+            for s in st:
+                s["l1_stored"] = s["l1"] // l1_step
+                s["l1"] = layers.l1_dequantize(s["l1_stored"], l1_step)
 
         def tile_job(t):
             ty, tx, y0, x0, th, tw = t
@@ -142,7 +147,7 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
                 qt = [s["q"][y0:y0 + th, x0:x0 + tw].astype(np.int64) for s in st]
                 up = [layers.upsample(s["l1"], k, rows, cols, upsampler) if use_l1 else np.zeros((th, tw), np.int64)
                       for s in st]
-                payload = [qt[p] - layers.cross_predict(p, qt, up, raw.offsets) for p in range(4)]
+                payload = [qt[p] - layers.cross_predict(p, qt, up, raw.offsets, g1_pred == "l1") for p in range(4)]
             else:
                 for s in st:
                     qt = s["q"][y0:y0 + th, x0:x0 + tw]
@@ -164,7 +169,8 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
 
         sections = [sec for secs in ex.map(tile_job, grid) for sec in secs]
         if use_l1:
-            sections += list(ex.map(lambda p: (("L1", p, 0, 0), entropy.jxl_encode(st[p]["l1"], effort)), range(4)))
+            sections += list(ex.map(lambda p: (("L1", p, 0, 0), entropy.jxl_encode(st[p].get("l1_stored", st[p]["l1"]),
+                                                                                  effort)), range(4)))
 
     original = None
     if keep_original and raw.meta.get("path"):
@@ -196,7 +202,9 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
         "tables": [{"xmax": s["hdr"]["xmax"], "lo": s["hdr"]["lo"]} for s in st],
         "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": packing,
                    "plane_shape": list(pshape), "l1": use_l1,
-                   "l1_mode": l1_mode, "rec": rec, "l2_pred": l2_pred},
+                   "l1_mode": l1_mode, "rec": rec, "l2_pred": l2_pred,
+                   **({"l1_step": l1_step} if l1_step != 1 else {}), **({"g1_pred": g1_pred} if g1_pred != "l1" else {})},
+        "stats": stats_mod.technical(raw, [s["hdr"]["model"] for s in st]),
         "embed": None,
     }
     return container.write(header, sections), {"planes": [s["info"] for s in st]}
@@ -220,7 +228,8 @@ class Decoder:
 
     def l1(self, p):
         if p not in self._l1:
-            self._l1[p] = entropy.jxl_decode(self.r.section("L1", p))
+            self._l1[p] = layers.l1_dequantize(entropy.jxl_decode(self.r.section("L1", p)).astype(np.int64),
+                                               self.layout.get("l1_step", 1))
         return self._l1[p]
 
     def q_tiles(self, t):
@@ -238,7 +247,8 @@ class Decoder:
                   else np.zeros((th, tw), np.int64) for p in range(4)]
             q = [None] * 4
             for p in layers.CROSS_ORDER:
-                q[p] = d[p].astype(np.int64) + layers.cross_predict(p, q, up, self.offsets)
+                q[p] = d[p].astype(np.int64) + layers.cross_predict(p, q, up, self.offsets,
+                                                                     self.layout.get("g1_pred", "l1") == "l1")
             return q
         if not self.layout["l1"]:
             return d

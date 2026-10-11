@@ -98,3 +98,13 @@ def test_index_reads_one_range(encoded):
     r = container.RangeReader(data)
     assert r.log == [(0, container.FIRST_READ)]
     assert r.header["source"]["sha256"]
+
+
+@pytest.mark.parametrize("l1_step,g1_pred", [(1, "none"), (4, "l1"), (16, "none")])
+def test_l1_variants_decode_exactly(synth_image, l1_step, g1_pred):
+    """Coarse L1 storage and direct G1 coding (L1-as-index exploration) keep every decode mode exact."""
+    data, _ = codec.encode(synth_image, step=1.0, tile=256, l1_step=l1_step, g1_pred=g1_pred)
+    orig = io_raw.unpack(synth_image.planes, synth_image.offsets)
+    assert np.array_equal(codec.decode(data, "exact"), orig)
+    base, _ = codec.encode(synth_image, step=1.0, tile=256)
+    assert np.array_equal(codec.decode(data, "signal"), codec.decode(base, "signal"))
