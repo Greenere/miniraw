@@ -7,7 +7,7 @@ name = "miniraw"
 version = "0.1.0"
 description = "Layered RAW photo codec: a noise-calibrated near-lossless hot tier plus an optional layer for bit-exact recovery"
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Greenere" }]
 requires-python = ">=3.11"
