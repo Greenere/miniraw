@@ -6,6 +6,7 @@ common models. Lists are committed under bench/splits/.
 import argparse
 import json
 import random
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -70,7 +71,7 @@ def download(keys, workers=4):
         p = path_for(k)
         if p.exists():
             return k, p.stat().st_size
-        url = meta[k]["urls"]["dng"].replace("http://", "https://")
+        url = urllib.parse.quote(meta[k]["urls"]["dng"].replace("http://", "https://"), safe=":/")
         tmp = p.with_suffix(".part")
         urllib.request.urlretrieve(url, tmp)
         tmp.rename(p)

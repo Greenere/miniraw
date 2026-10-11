@@ -24,7 +24,17 @@ def fit_noise(plane, b, white, noise_profile=None, plane_index=0, diagnostics=Tr
     diagnostics=False skips re-validating the isotonic fallback (report-only data).
     """
     xmax = int(max(white, int(plane.max())))
-    model, (xs, vs, ws), blocks = noise.estimate(plane, b, white, return_blocks=True)
+    try:
+        model, (xs, vs, ws), blocks = noise.estimate(plane, b, white, return_blocks=True)
+    except noise.TooFewBlocks:
+        # Very dark or sparse planes (e.g. Leica M8 companded raws): use the DNG profile if there is
+        # one, else keep every value exact. Neither can be validated without flat blocks.
+        if noise_profile:
+            model, fallback = noise.from_noise_profile(noise_profile, plane_index, b, white), "noise_profile"
+        else:
+            model, fallback = noise.lossless_model(b, xmax), "lossless"
+        info = {"estimated": {}, "fallback": fallback, "validate_sigma": [], "validated": None, "model": model}
+        return model, vst.T_table(model, xmax), info
     info = {"estimated": dict(model)}
     if noise_profile:
         npm = noise.from_noise_profile(noise_profile, plane_index, b, white)

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Held-out FiveK test split (60 images) run with the configuration frozen**, reported in the README and `results/report_test.md`. Lossless ties JPEG XL; the hot tier is 0.40x the camera file; the error bound fails on 3 images.
+- Planes whose noise can't be estimated (too few unclipped flat blocks, e.g. a dark Leica M8 frame) no longer crash the encoder. They use the DNG noise profile if there is one, else a lossless model.
+- `bench.datasets` downloads FiveK files whose names contain spaces.
 - **Cross-plane L2 prediction (format default).** G2 is predicted from the surrounding G1, and R and B from the surrounding green plus the low-pass colour difference from L1. On the Sony A7 IV set the hot tier is 4.5-5% smaller at the default effort and 6-9% smaller at effort 7. Older files decode unchanged.
 - The README reports sensor-exact and file-exact sizes separately.
 - **Efficiency (byte-identical output).**

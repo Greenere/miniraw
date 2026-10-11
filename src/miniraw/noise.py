@@ -17,6 +17,10 @@ MIN_KEPT = 8          # kept blocks needed for a bin to enter the fit
 MIN_KEPT_VALIDATE = 50
 
 
+class TooFewBlocks(ValueError):
+    """Not enough unclipped flat blocks in at least two intensity bins to fit a model."""
+
+
 def _extract(plane, white):
     """Unclipped 8x8 blocks (raw integer values) and their means."""
     h, w = plane.shape
@@ -146,10 +150,12 @@ def estimate(plane, b, white, return_blocks=False):
     """Fit the affine model for one plane. Returns a model dict plus the binned data
     (and the extracted blocks, for reuse in validation, if return_blocks)."""
     blk, mean = _extract(plane, white)
+    if len(blk) == 0:
+        raise TooFewBlocks("no unclipped blocks to estimate noise")
     var = _robust_var(blk)
     xs, vs, ws = _binned(mean, var, b, white)
     if len(xs) < 2:
-        raise ValueError("too few flat blocks to estimate noise")
+        raise TooFewBlocks("too few flat blocks to estimate noise")
     a, c = fit_affine(xs, vs, ws, b)
     model = {"type": "affine", "a": a, "b": float(b), "c": c}
     if return_blocks:
@@ -162,6 +168,12 @@ def isotonic_model(xs, vs, ws, b, xmax):
     kx = np.concatenate([[0.0], xs, [float(xmax)]])
     kv = np.concatenate([[v[0]], v, [v[-1]]])
     return {"type": "isotonic", "b": float(b), "knots_x": kx.tolist(), "knots_v": kv.tolist()}
+
+
+def lossless_model(b, xmax):
+    """Variance far below one DN, so every value gets its own bin at any practical step: used when
+    the noise can't be estimated, so the hot tier keeps everything instead of guessing."""
+    return {"type": "isotonic", "b": float(b), "knots_x": [0.0, float(xmax)], "knots_v": [1e-6, 1e-6]}
 
 
 def from_noise_profile(pairs, plane_index, b, white):

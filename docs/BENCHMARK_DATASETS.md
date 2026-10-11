@@ -1,8 +1,7 @@
 # Benchmark datasets for MiniRaw
 
 Oct 10, 2026. This is a plan for testing MiniRaw beyond the current two sets: 10 Sony A7 IV files and 20 MIT-Adobe
-FiveK files. **Nothing listed here has been downloaded or run yet.** The development machine has about 16 GB of
-free disk space, which limits what can be fetched at once.
+FiveK files. **Nothing listed here has been downloaded or run yet.**
 
 ## Why
 
@@ -43,18 +42,22 @@ and ground truth (.mat with dark levels).
 - A split zip keeps its file index in the last part, so all five parts of a camera are needed before anything can
   be extracted.
 
-**Hugging Face mirror: scriptable, but not original raws.**
-- Two mirrors: `StevenChangWei/nus8-dataset` and `CreanAlence/nus8-dataset`, which look identical. They are
-  labelled Apache-2.0; whether the mirror is entitled to relicense the data is unverified.
-- They contain PNG files (e.g. `images/Canon1DsMkIII_0001.PNG`, about 19-24 MB each) plus masks and
-  `all_cameras_meta.json`.
-- The first listing page alone shows 1,000 PNGs totalling about 18.6 GB, so the full mirror is larger than the
-  free disk.
-- These are almost certainly the DCRAW-converted PNGs, not the camera's raw files. Before using them, check that
-  each PNG is the full-resolution Bayer mosaic (not downsampled), and get each camera's CFA pattern, black level
-  and white level from the metadata.
-- With PNG input, MiniRaw's sensor-exact compression can be measured. Restoring the original camera file can't,
-  because the original container isn't there.
+**Hugging Face mirror: not usable (checked Oct 10, 2026).**
+- Two mirrors: `StevenChangWei/nus8-dataset` and `CreanAlence/nus8-dataset`. Per camera: Canon 1Ds Mk III 259
+  PNGs, Canon 600D 200, Olympus E-PL6 208, Panasonic GX1 203, Samsung NX2000 202 (about 21 GB for the five).
+- The PNGs are the official "DCRAW-converted" set, which the NUS page says was downsampled by Bayer cell into a
+  colour image. A sample confirms it: `Canon1DsMkIII_0001.PNG` is 2820x1876x3 uint16 with values up to 65535
+  (stretched), not a 5616x3744 mosaic. The two greens are merged, so the sensor data can't be recovered.
+- `all_cameras_meta.json` has per-image black and saturation levels (e.g. 1024 and 15279 for the 1Ds Mk III).
+- **Conclusion: only the official RAW zips work.** They must be downloaded in a browser.
+
+**RAWIC's protocol, from its scripts and paper.**
+- Bitrate is bits per sensor sample over `raw_image_visible`, with no black-level subtraction or crop. JPEG XL
+  and the other baselines are `imagecodecs` defaults on the RGGB-packed mosaic (`tra_codec_raw.py`).
+- Test split: a random 10% per camera from an unseeded `np.random.permutation`, and no `test.txt` is published.
+  So the split can't be reproduced; measure every image per camera instead.
+- Table I (bpp): RAWIC 6.79 / 7.47 / 5.11 / 5.99 / 5.83 and JPEG XL 7.29 / 7.95 / 5.60 / 6.57 / 6.46 for
+  Canon 1Ds Mk III / Canon 600D / Olympus E-PL6 / Panasonic GX1 / Samsung NX2000 (RAISE: 7.80 and 8.29).
 
 **Disk plan.** Process one camera at a time: download, run `bench.run --dir`, keep the CSVs, delete the images.
 The runner is resumable and keeps per-image CSVs, so this works within about 5 GB of space per camera.

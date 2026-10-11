@@ -70,3 +70,18 @@ def test_forward_table(model, step):
     n, rec = vst.tables_from_lo(lo, xmax)
     assert n.sum() == xmax + 1 and np.all(rec >= lo) and np.all(rec < lo + n)
     assert np.all(vst.bound_check(T, fwd, rec, step) <= 1e-9)
+
+
+def test_unestimable_plane_falls_back_to_lossless(synth_image):
+    """A plane with no unclipped flat blocks (black 0, mostly zeros, like a dark Leica M8 frame)
+    encodes with a lossless model instead of raising, and decodes exactly in every mode."""
+    rng = np.random.default_rng(0)
+    planes = synth_image.planes.copy()
+    planes[3] = rng.integers(0, 3, planes[3].shape) * rng.integers(0, 2, planes[3].shape)
+    img = io_raw.RawImage(planes, OFFSETS, synth_image.black[:3] + [0], synth_image.white, 14)
+    data, info = codec.encode(img, step=1.0, tile=256)
+    assert info["planes"][3]["fallback"] == "lossless"
+    assert "fallback" not in info["planes"][0]
+    orig = io_raw.unpack(planes, OFFSETS)
+    assert np.array_equal(codec.decode(data, "exact"), orig)
+    assert np.array_equal(codec.decode(data, "signal")[1::2, 1::2], planes[3])
