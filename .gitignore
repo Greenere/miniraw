@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.egg-info/
+data/
+results/cache/
+.pytest_cache/
+*.mraw
+*.mraw.l3

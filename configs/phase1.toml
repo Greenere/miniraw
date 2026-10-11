@@ -1,0 +1,11 @@
+# MiniRaw Phase 1 benchmark configuration. All tunables chosen on the dev split.
+step = 1.0
+steps = [0.5, 1.0, 1.5, 2.0]
+tile = 512
+effort = 7
+l1_mode = "mean"         # "mean" = construction A, "wavelet" = construction B; A chosen on dev (D18)
+upsampler = "bilinear"   # construction A only
+rec = "floor"            # spec 4.3 formula; "checker" is the unbiased alternative (D17)
+b5_bits = [12, 11, 10, 9, 8, 7]
+b2_effort9 = false
+workers = 4
