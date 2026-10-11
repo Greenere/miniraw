@@ -103,6 +103,11 @@ bootstrap intervals.
 | All layers, sensor-exact / camera raw file | 0.88 | [0.86, 0.89] |
 | All layers / JPEG XL lossless | **1.00** | [1.00, 1.01] |
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_test_size_dark.svg">
+  <img alt="Strip chart of size relative to the camera's raw file, one dot per image for 41 held-out FiveK images from 14 cameras. JPEG XL lossless: median 0.87x, range 0.78 to 0.94. MiniRaw all layers, bit-exact: median 0.88x, overlapping JPEG XL. MiniRaw hot tier at step 1.0: median 0.40x, range 0.28 to 0.51." src="docs/img/fivek_test_size_light.svg">
+</picture>
+
 What held up:
 - **The hot tier is 60% smaller than the camera's file**, with the worst pixel at 0.61 sigma (median over
   images).
@@ -110,6 +115,11 @@ What held up:
 - **Worst-case error is still where MiniRaw wins.** Within MiniRaw's step range (0.5-2.0), at the same average
   error as the square-root curve the sizes tie; at the same worst-case error the square-root curve is 16-35%
   larger.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_test_quality_dark.svg">
+  <img alt="Two line charts of error against median bits per pixel on the held-out FiveK images. Worst-case error: MiniRaw runs from 1.07 sigma at 1.96 bpp to 0.37 sigma at 3.68 bpp, with the default step 1.0 at 2.74 bpp and 0.61 sigma; the square-root curve runs from 2.3 sigma at 1.88 bpp to 0.15 sigma at 5.46 bpp and stays above MiniRaw at every size. Average error: the two curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_test_quality_light.svg">
+</picture>
 
 What didn't:
 - **Lossless is a tie with JPEG XL, not a win.** The 2% saving above is specific to the Sony A7 IV files.
