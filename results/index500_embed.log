@@ -1,0 +1,26 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+clip-b32 R: 5 s
+clip-b32 R-small: 10 s
+clip-b32 R-plane: 13 s
+clip-b32 E: 17 s
+clip-b32 L1-256: 26 s
+clip-b32 L1-128: 31 s
+clip-b32 L1-64: 34 s
+clip-b32 L1-256-half: 38 s
+clip-b32 L1-128-half: 42 s
+clip-b32 L1-64-half: 45 s
+clip-b32 L1-spec: 48 s
+wrote /Users/greenli/repos/miniraw/results/cache/index/index500/emb_clip-b32.npz
+siglip-b16-256 R: 13 s
+siglip-b16-256 R-small: 25 s
+siglip-b16-256 R-plane: 36 s
+siglip-b16-256 E: 47 s
+siglip-b16-256 L1-256: 64 s
+siglip-b16-256 L1-128: 77 s
+siglip-b16-256 L1-64: 87 s
+siglip-b16-256 L1-256-half: 100 s
+siglip-b16-256 L1-128-half: 111 s
+siglip-b16-256 L1-64-half: 122 s
+siglip-b16-256 L1-spec: 133 s
+wrote /Users/greenli/repos/miniraw/results/cache/index/index500/emb_siglip-b16-256.npz

@@ -142,9 +142,7 @@ set of 60 was drawn and run once; that is the set reported here.
 | Images where the noise model was corrected | 47, raised to fit texture | 24, lowered only |
 | Hot tier / JPEG XL lossless | 0.468 | 0.483 (keeps the detail it was discarding) |
 
-Full write-up: [results/fivek_benchmark.md](results/fivek_benchmark.md). The A7 IV figures earlier in this section
-predate the fix and have not been re-measured. The FiveK timings come from an Apple M4 Pro, so they aren't
-compared with the M1 timings above.
+Full write-up: [results/fivek_benchmark.md](results/fivek_benchmark.md).
 
 To regenerate the charts from your own files:
 

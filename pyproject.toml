@@ -31,6 +31,7 @@ Issues = "https://github.com/Greenere/miniraw/issues"
 
 [project.optional-dependencies]
 dev = ["pytest", "matplotlib"]
+index = ["open_clip_torch", "torch", "transformers", "sentencepiece"]   # bench/experiments/index_eval.py
 
 [project.scripts]
 miniraw = "miniraw.cli:main"

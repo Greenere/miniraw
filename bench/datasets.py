@@ -64,6 +64,29 @@ def make_splits(n_dev=20, n_test=60, n_holdout=60, seed=0):
     return dev, test, holdout
 
 
+def make_index_split(n=500, seed=1):
+    """index500: images in no other split, stratified by FiveK subject in proportion (index benchmark)."""
+    meta = load_meta()
+    used = set(read_split("dev")) | set(read_split("test")) | set(read_split("holdout"))
+    by_subj = defaultdict(list)
+    for k in sorted(meta):
+        if k not in used:
+            by_subj[meta[k]["categories"].get("subject", "unknown")].append(k)
+    rng = random.Random(seed)
+    total = sum(len(v) for v in by_subj.values())
+    picked, rest = [], []
+    for subj in sorted(by_subj):
+        keys = by_subj[subj]
+        rng.shuffle(keys)
+        m = round(n * len(keys) / total)
+        picked += keys[:m]
+        rest += [(-len(keys), i, k) for i, k in enumerate(keys[m:])]
+    picked += [k for _, _, k in sorted(rest)[: max(n - len(picked), 0)]]   # rounding: top up from the largest
+    picked = sorted(picked)[:n]
+    (SPLITS / "index500.txt").write_text("\n".join(picked) + "\n")
+    return picked
+
+
 def read_split(name):
     return [l.strip() for l in (SPLITS / f"{name}.txt").read_text().splitlines() if l.strip()]
 
@@ -98,9 +121,11 @@ def camera_of(key):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout"])
+    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout", "index500"])
     ap.add_argument("--make-splits", action="store_true")
     a = ap.parse_args()
     if a.make_splits or not (SPLITS / "dev.txt").exists():
         make_splits()
+    if a.split == "index500" and not (SPLITS / "index500.txt").exists():
+        make_index_split()
     download(read_split(a.split))
