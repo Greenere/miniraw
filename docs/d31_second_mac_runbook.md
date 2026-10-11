@@ -15,11 +15,10 @@ Expected outcome, from the 30 images already checked (dev and the Sony A7 IV set
 
 ## 1. Get the code
 
-On the main Mac, branch `d31-trim-bins` must be pushed first (`git push -u origin d31-trim-bins`). Then:
+D31 is on `main`; the main Mac must have pushed it (`git push`). Then:
 
 ```sh
-git clone https://github.com/Greenere/miniraw.git && cd miniraw     # or: git fetch && cd miniraw
-git checkout d31-trim-bins
+git clone https://github.com/Greenere/miniraw.git && cd miniraw     # or, in an existing clone: git pull
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest -q                                        # expect all passed, 1 skipped
 ```
