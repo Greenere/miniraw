@@ -39,11 +39,14 @@ def fit_noise(plane, b, white, noise_profile=None, plane_index=0):
 
 
 def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
-           with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None):
+           with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None,
+           packing="P3", l1_min_side=128):
     """Encode a RawImage. `models` (per-plane noise model dicts) skips estimation.
 
     l1_mode "mean" is construction A (floor-mean L1, L2 codes q - up(L1));
     "wavelet" is construction B (per-tile 5/3 lifting, L1 = LL bands, L2 = detail bands).
+    packing names a plane grouping in layers.PACKINGS for the L2 JPEG XL images.
+    l1_min_side sets k: the largest power of two keeping L1's shorter side >= it.
     rec selects the signal-mode reconstruction: "floor" is spec 4.3's lo + (n-1)//2;
     "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17).
 
@@ -53,7 +56,9 @@ def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
     planes = raw.planes
     pshape = planes.shape[1:]
     rec_mode = rec
-    k = (k or layers.choose_k(pshape)) if use_l1 else 0
+    k = (k or layers.choose_k(pshape, l1_min_side)) if use_l1 else 0
+    groups = layers.PACKINGS[packing]
+    payloads = [{} for _ in range(4)]
     levels = k.bit_length() - 1 if use_l1 else 0
     if use_l1 and l1_mode == "wavelet" and tile is not None:
         assert tile % k == 0
@@ -99,10 +104,16 @@ def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
                 payload = qt - up
             else:
                 payload = coeffs[ty, tx]
-            sections.append((("L2", p, ty, tx), entropy.jxl_encode(payload, effort)))
+            payloads[p][ty, tx] = payload
             if with_l3:
                 kappa = x[y0:y0 + th, x0:x0 + tw].astype(np.int64) - lo[qt]
                 sections.append((("L3", p, ty, tx), entropy.kappa_encode(kappa, n[qt])))
+
+    for g, members in enumerate(groups):
+        for ty, tx in payloads[0]:
+            img = [payloads[p][ty, tx] for p in members]
+            img = img[0] if len(img) == 1 else np.stack(img, -1)
+            sections.append((("L2", g, ty, tx), entropy.jxl_encode(img, effort)))
 
     h, w = raw.sensor_shape
     header = {
@@ -112,7 +123,7 @@ def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
         "source": {**(source or {}), "sha256": mosaic_sha256(planes, raw.offsets)},
         "noise": {"step": step, "planes": [ph["model"] for ph in plane_hdr]},
         "tables": [{"xmax": ph["xmax"], "lo": ph["lo"]} for ph in plane_hdr],
-        "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": "P1",
+        "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": packing,
                    "plane_shape": list(pshape), "l1": use_l1,
                    "l1_mode": l1_mode, "rec": rec_mode},
         "embed": None,
@@ -133,6 +144,16 @@ class Decoder:
             n, rec = vst.tables_from_lo(lo, t["xmax"])
             self.tables.append((lo, n, rec))
         self._l1 = {}
+        groups = layers.PACKINGS[self.layout.get("packing", "P1")]
+        self._where = {p: (g, i) for g, m in enumerate(groups) for i, p in enumerate(m)}
+        self._l2_cache = (None, None)
+
+    def l2_payload(self, p, ty, tx):
+        g, i = self._where[p]
+        if self._l2_cache[0] != (g, ty, tx):
+            self._l2_cache = ((g, ty, tx), entropy.jxl_decode(self.r.section("L2", g, ty, tx)))
+        arr = self._l2_cache[1]
+        return arr if arr.ndim == 2 else arr[..., i]
 
     def l1(self, p):
         if p not in self._l1:
@@ -141,7 +162,7 @@ class Decoder:
 
     def q_tile(self, p, t):
         ty, tx, y0, x0, th, tw = t
-        d = entropy.jxl_decode(self.r.section("L2", p, ty, tx))
+        d = self.l2_payload(p, ty, tx)
         if self.layout["l1"] and self.layout.get("l1_mode") == "wavelet":
             k = self.layout["k"]
             levels = k.bit_length() - 1
@@ -159,10 +180,10 @@ class Decoder:
         y0, x0, y1, x1 = prect or (0, 0, *self.pshape)
         out = np.empty((4, y1 - y0, x1 - x0), np.uint16)
         rng = np.random.default_rng(seed)
-        for p in range(4):
-            lo, n, rec = self.tables[p]
-            for t in layers.tiles_touching(self.pshape, self.layout["tile"], y0, x0, y1, x1):
-                ty, tx, ty0, tx0, th, tw = t
+        for t in layers.tiles_touching(self.pshape, self.layout["tile"], y0, x0, y1, x1):
+            ty, tx, ty0, tx0, th, tw = t
+            for p in range(4):
+                lo, n, rec = self.tables[p]
                 q = self.q_tile(p, t)
                 if mode == "exact":
                     x = lo[q] + entropy.kappa_decode(self.r.section("L3", p, ty, tx), n[q])

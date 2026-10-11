@@ -20,7 +20,7 @@ def tables(b, white, xmax, bits):
     return fwd, rec
 
 
-def run(raw, bits, tile=512, effort=7):
+def run(raw, bits, tile=512, effort=7, packing="P1"):
     """Returns (bytes, decoded planes)."""
     q, dec = [], []
     for p in range(4):
@@ -28,4 +28,4 @@ def run(raw, bits, tile=512, effort=7):
         fwd, rec = tables(raw.black[p], raw.white, int(max(raw.white, int(x.max()))), bits)
         q.append(fwd[x])
         dec.append(rec[fwd[x]])
-    return b2_jxl.encode_bytes(q, tile, effort), np.stack(dec).astype(np.uint16)
+    return b2_jxl.encode_bytes(np.stack(q), tile, effort, packing), np.stack(dec).astype(np.uint16)

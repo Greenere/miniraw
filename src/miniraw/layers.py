@@ -2,6 +2,16 @@
 import numpy as np
 
 
+# Plane groups coded together as one JPEG XL image (plane order R, G1, G2, B).
+PACKINGS = {
+    "P1": [[0], [1], [2], [3]],          # four grayscale images
+    "P2": [[0, 1, 3], [2]],              # RGB (R, G1, B) + G2
+    "P2g": [[1, 0, 3], [2]],             # G1 first, so it can predict R and B
+    "P3": [[0, 1, 2, 3]],                # one 4-channel image
+    "PG": [[1, 2], [0], [3]],            # greens together, R and B alone
+}
+
+
 def choose_k(plane_shape, min_side=256):
     k = 1
     while min(plane_shape) // (k * 2) >= min_side:

@@ -29,6 +29,18 @@ miniraw strip IN.mraw        # drop L3 in place
 miniraw split IN.mraw        # move L3 to IN.mraw.l3
 ```
 
+## Try it on your own raw file
+
+```sh
+python -m bench.eval PATH/TO/IMG.NEF                  # sizes, checks, step sweep, B5 comparison
+python -m bench.eval IMG.CR2 --render out/ --out IMG.mraw   # + render comparison crops, keep the .mraw
+python -m bench.eval IMG.ARW --quick                  # skip the sweep and B5
+```
+
+Any 2x2-Bayer raw that LibRaw (rawpy) opens works: NEF, CR2, CR3, ARW, DNG, RAF (Bayer models), ORF, RW2 and others.
+Use the camera's lossless or uncompressed raw mode: lossy raw modes (e.g. Nikon "compressed", Sony "compressed")
+have already discarded data, and the script warns when it detects that.
+
 ## Benchmark
 
 ```sh

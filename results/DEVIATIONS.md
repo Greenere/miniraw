@@ -55,6 +55,20 @@ That run is archived in `results/per_image/dev_specA/`. It used construction A, 
 - **D19. B5 curve range.** The first B5 subtracted black and clipped below it, so every below-black value collapsed to one code (max errors of 8 to 85 sigma). B5 now applies the sqrt curve over the whole raw range 0..xmax, and the bit sweep extends to 8 and 7 bits so that its distortion range overlaps MiniRaw's step sweep.
 - **D20. Single-DN bins at and above the white level.** The forward table forces a bin boundary at `white` and gives every value at or above it its own bin. Clipped pixels carry no noise, so they decode exactly in `signal` mode, add nothing to L3, and stay out of the bias statistic. This applies spec pitfall 6 ("they still code correctly through the table") literally.
 
+- **D21. Plane packing P3.** Every packing was measured on dev for both MiniRaw L2 and B2 (`bench/experiments/packing.py`), each relative to P1:
+
+  | Packing | L2 | B2 |
+  | --- | --- | --- |
+  | P2 | -0.8% | -0.2% |
+  | P2 with G1 first | -0.9% | -0.1% |
+  | P3 | -1.5% | -0.4% |
+  | Greens together | +7.7% | -0.2% |
+  | Effort 9 | -0.9% | -0.6% (at 4.9x encode time) |
+
+  P3, a single 4-channel image per tile, is used for MiniRaw, B2 and B5 alike. The report also keeps B2 under P1 (`B2_P1_bytes`). Effort stays at 7.
+- **D22. Smaller base layer: L1 shorter side of at least 128 px instead of 256.** With the spec's rule, G3 failed (1.048). Halving the L1 resolution gave 1.025 [1.014, 1.031] on dev; L1 is then about 57 KB, with a shorter side still above a 224 px CLIP input for most sensors. The setting is `l1_min_side`.
+- **Measured, not adopted: a context-modelled L3** (`bench/experiments/l3_context.py`). The context is where the 3x3 mean of signal-mode neighbours falls relative to the pixel's bin. It lowers the ideal L3 cost by a median 0.050 bpp (0.22 bpp on the noise-reduced Leica D-LUX 3), about half of G1's overhead, before the cost of storing tables. That is under 1% of the file and touches only the cold tier, so it is deferred.
+
 ## Environment
 
 - **D16. Platform.** macOS arm64 (Apple M1) with Python 3.14, not Linux with Python 3.11. libjxl 0.12.0 via imagecodecs, used for both MiniRaw and the baselines.

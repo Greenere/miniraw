@@ -233,7 +233,7 @@ def main():
         m, lo, hi = boot_median_ci(clean[f"r_G3_{v}"])
         L.append(f"    - {v.replace('_bilinear', '').replace('_nearest', '').replace('mean', 'A (floor-mean)').replace('wavelet', 'B (5/3 wavelet)')}"
                  f"{', nearest upsampler' if 'nearest' in v else ''}: median {m:.3f} [{lo:.3f}, {hi:.3f}]")
-    L.append("- G3 against base-layer size (construction A, bilinear; k from spec 4.5 = %s):"
+    L.append("- G3 against base-layer size (construction A, bilinear; k from l1_min_side = %s):"
              % "/".join(str(int(x)) for x in sorted(clean.k.unique())))
     for mult in (1, 2, 4):
         if mult == 1:

@@ -83,7 +83,8 @@ def run_image(key, cfg, split):
 
     # --- MiniRaw default configuration
     te = time.time()
-    enc = dict(tile=T, effort=E, upsampler=cfg["upsampler"], l1_mode=cfg["l1_mode"], rec=cfg["rec"])
+    enc = dict(tile=T, effort=E, upsampler=cfg["upsampler"], l1_mode=cfg["l1_mode"], rec=cfg["rec"],
+               packing=cfg["packing"], l1_min_side=cfg["l1_min_side"])
     data, info = codec.encode(raw, step=step, source={"file": path.name, "camera": row["camera"]}, **enc)
     row["encode_s"] = time.time() - te
     models = [pi["model"] for pi in info["planes"]]
@@ -151,7 +152,7 @@ def run_image(key, cfg, split):
         row[f"L1L2_{mode}_{ups}_bytes"] = s["L1"] + s["L2"]
     # G3 versus base-layer size: construction A with k doubled and quadrupled
     from miniraw import layers as _layers
-    k0 = _layers.choose_k(raw.planes.shape[1:])
+    k0 = _layers.choose_k(raw.planes.shape[1:], cfg["l1_min_side"])
     row["k"] = k0
     for mult in (2, 4):
         dv, _ = codec.encode(raw, step=step, with_l3=False, models=models,
@@ -163,13 +164,14 @@ def run_image(key, cfg, split):
     # --- Baselines
     row["B0_bpp"] = raw.bit_depth
     row["B1_bytes"] = b1_native.raw_bytes(path)
-    row["B2_bytes"] = b2_jxl.encode_bytes(raw.planes, T, E)
+    row["B2_bytes"] = b2_jxl.encode_bytes(raw.planes, T, E, cfg["packing"])
+    row["B2_P1_bytes"] = b2_jxl.encode_bytes(raw.planes, T, E, "P1")
     if cfg.get("b2_effort9"):
-        row["B2e9_bytes"] = b2_jxl.encode_bytes(raw.planes, T, 9)
+        row["B2e9_bytes"] = b2_jxl.encode_bytes(raw.planes, T, 9, cfg["packing"])
     for bits in cfg["b5_bits"]:
         if bits >= raw.bit_depth:
             continue
-        nb, dec = b5_sqrt.run(raw, bits, T, E)
+        nb, dec = b5_sqrt.run(raw, bits, T, E, cfg["packing"])
         errs = [metrics.stabilized_errors(raw.planes[p], dec[p], info["planes"][p]["T"]) for p in range(4)]
         row[f"B5_{bits}_bytes"] = nb
         row[f"B5_{bits}_stab_rmse"] = float(np.sqrt(np.mean([e[0] ** 2 for e in errs])))
@@ -206,7 +208,8 @@ def run_synth(cfg, split, n_images=3):
             x1 = np.stack([d[0] for d in draws])
             img = io_raw.RawImage(x1, raw.offsets, [synth.B] * 4, synth.WHITE, 14)
             data, info = codec.encode(img, step=cfg["step"], tile=cfg["tile"], effort=cfg["effort"],
-                                      l1_mode=cfg["l1_mode"], rec=cfg["rec"])
+                                      l1_mode=cfg["l1_mode"], rec=cfg["rec"], packing=cfg["packing"],
+                                      l1_min_side=cfg["l1_min_side"])
             dec = codec.Decoder(container.RangeReader(data)).planes("signal")
             true = {"type": "affine", "a": a, "b": float(synth.B), "c": c}
             Tt = vst.T_table(true, synth.WHITE)

@@ -6,9 +6,11 @@ from bench import metrics
 from miniraw import codec, container, io_raw
 
 
-@pytest.fixture(scope="module", params=["mean", "wavelet"])
+@pytest.fixture(scope="module", params=[("mean", "P1"), ("wavelet", "P1"), ("mean", "P2"),
+                                        ("mean", "P3"), ("wavelet", "PG")])
 def encoded(synth_image, request):
-    return codec.encode(synth_image, tile=256, effort=3, l1_mode=request.param)
+    l1_mode, packing = request.param
+    return codec.encode(synth_image, tile=256, effort=3, l1_mode=l1_mode, packing=packing)
 
 
 def test_exact_roundtrip(synth_image, encoded):
