@@ -19,7 +19,7 @@ def mosaic_sha256(planes, offsets, rows=256):
 
 
 def fit_noise(plane, b, white, noise_profile=None, plane_index=0, diagnostics=True):
-    """Noise model for one plane, with validation and isotonic fallback (spec 4.2).
+    """Noise model for one plane, with validation and a lower-only isotonic correction (spec 4.2, D26).
 
     diagnostics=False skips re-validating the isotonic fallback (report-only data).
     """
@@ -45,12 +45,16 @@ def fit_noise(plane, b, white, noise_profile=None, plane_index=0, diagnostics=Tr
     info["validate_sigma"] = sig.tolist()
     ok = len(sig) > 0 and bool(np.all((sig >= 0.9) & (sig <= 1.1)))
     info["validated"] = ok
-    if not ok:
-        model = noise.isotonic_model(xs, vs, ws, b, xmax)
-        T = vst.T_table(model, xmax)
-        if diagnostics:
-            _, sig2, _ = noise.stabilized_sigma_by_bin(plane, model, white, T, blocks)
-            info["validate_sigma_isotonic"] = sig2.tolist()
+    # Lower-only correction (D26): sigma below 0.9 means the model over-estimates the noise there, which would
+    # discard signal. Sigma above 1.1 is left alone: it is usually texture, and an under-estimate only costs bits.
+    if len(sig) and np.any(sig < 0.9):
+        lowered = noise.lowered_model(model, xs, vs, ws, b, xmax)
+        if lowered is not model:
+            model = lowered
+            T = vst.T_table(model, xmax)
+            if diagnostics:
+                _, sig2, _ = noise.stabilized_sigma_by_bin(plane, model, white, T, blocks)
+                info["validate_sigma_isotonic"] = sig2.tolist()
     info["model"] = model
     return model, T, info
 

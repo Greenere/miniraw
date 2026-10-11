@@ -85,3 +85,13 @@ def test_unestimable_plane_falls_back_to_lossless(synth_image):
     orig = io_raw.unpack(planes, OFFSETS)
     assert np.array_equal(codec.decode(data, "exact"), orig)
     assert np.array_equal(codec.decode(data, "signal")[1::2, 1::2], planes[3])
+
+
+@pytest.mark.parametrize("step", [1.0, 2.0, 3.0, 4.0])
+def test_bound_holds_at_large_steps(step):
+    """Bins are split where the middle DN would miss the bound (D27); the 5D Mark II-like model failed at step 2."""
+    model = {"type": "affine", "a": 7.0, "b": 1021.0, "c": 350.0}
+    T = vst.T_table(model, 16383)
+    fwd = vst.forward_table(T, step, 15600)
+    n, rec = vst.tables_from_lo(vst.lo_from_forward(fwd), 16383)
+    assert vst.bound_check(T, fwd, rec, step).max() <= 1e-9

@@ -271,7 +271,7 @@ def _worker(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(ROOT / "configs" / "phase1.toml"))
-    ap.add_argument("--split", default="dev", choices=["dev", "test"])
+    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout"])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--no-synth", action="store_true")
     ap.add_argument("--dir", help="benchmark every raw file in this folder (results under its name)")

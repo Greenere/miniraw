@@ -2,8 +2,9 @@
 
 Var(x) = a * max(x - b, 0) + c, per plane. Estimator: 8x8 blocks, robust MAD
 variance of a Laplacian residual (deviation D1), 32 log-spaced intensity bins, median of the
-lowest-20% variances per bin, Huber fit. Falls back to an isotonic fit when the
-stabilized flat-block sigma leaves [0.9, 1.1].
+lowest-20% variances per bin, Huber fit with one-sided trimming (D26). When the stabilized
+flat-block sigma drops below 0.9 the model is lowered there (D26); it is never raised, because
+texture only inflates flat-block variance and an over-estimated sigma discards signal.
 """
 from functools import lru_cache
 
@@ -15,6 +16,8 @@ NBINS = 32
 KEEP = 0.20
 MIN_KEPT = 8          # kept blocks needed for a bin to enter the fit
 MIN_KEPT_VALIDATE = 50
+VAR_FLOOR = 0.25      # bins below sigma 0.5 DN are unidentifiable (MAD of integer data) and left out of the fit
+TRIM = 1.25           # bins with sigma more than this factor above the fit are treated as texture and refit without
 
 
 class TooFewBlocks(ValueError):
@@ -99,6 +102,21 @@ def _binned(mean, var, b, white, min_kept=MIN_KEPT):
     return np.array(xs), np.array(vs), np.array(ws, float)
 
 
+def fit_affine_trimmed(xs, vs, ws, b, iters=3):
+    """fit_affine, then refit without bins whose sigma sits more than TRIM above the fit.
+
+    Texture leaking into flat blocks can only raise a bin's variance, so outliers are dropped on that side only.
+    """
+    keep = np.ones(len(xs), bool)
+    for _ in range(iters):
+        a, c = fit_affine(xs[keep], vs[keep], ws[keep], b)
+        new = vs <= TRIM ** 2 * (a * np.maximum(xs - b, 0) + c)
+        if new.sum() < 2 or (new == keep).all():
+            break
+        keep = new
+    return a, c
+
+
 def fit_affine(xs, vs, ws, b):
     s = np.maximum(xs - b, 0.0)
     a0, c0 = np.polyfit(s, vs, 1, w=np.sqrt(ws))
@@ -156,7 +174,8 @@ def estimate(plane, b, white, return_blocks=False):
     xs, vs, ws = _binned(mean, var, b, white)
     if len(xs) < 2:
         raise TooFewBlocks("too few flat blocks to estimate noise")
-    a, c = fit_affine(xs, vs, ws, b)
+    ok = vs >= VAR_FLOOR
+    a, c = fit_affine_trimmed(xs[ok], vs[ok], ws[ok], b) if ok.sum() >= 2 else fit_affine(xs, vs, ws, b)
     model = {"type": "affine", "a": a, "b": float(b), "c": c}
     if return_blocks:
         return model, (xs, vs, ws), (blk, mean)
@@ -167,6 +186,26 @@ def isotonic_model(xs, vs, ws, b, xmax):
     v = np.maximum(_pav(vs, ws), 1.0 / 12)
     kx = np.concatenate([[0.0], xs, [float(xmax)]])
     kv = np.concatenate([[v[0]], v, [v[-1]]])
+    return {"type": "isotonic", "b": float(b), "knots_x": kx.tolist(), "knots_v": kv.tolist()}
+
+
+def lowered_model(model, xs, vs, ws, b, xmax):
+    """min(affine, isotonic over well-populated bins) as an exact piecewise-linear variance.
+
+    Both are piecewise linear in x, so the minimum is too, with knots at either's knots or where they cross.
+    """
+    t = ws >= MIN_KEPT_VALIDATE
+    if t.sum() < 2:
+        return model
+    iso = isotonic_model(xs[t], vs[t], ws[t], b, xmax)
+    f_aff, f_iso = variance_fn(model), variance_fn(iso)
+    kx = np.unique(np.concatenate([iso["knots_x"], [float(b)]]))
+    kx = kx[(kx >= 0) & (kx <= xmax)]
+    d = f_aff(kx) - f_iso(kx)
+    cross = np.flatnonzero(np.sign(d[:-1]) * np.sign(d[1:]) < 0)
+    xc = kx[cross] + (kx[cross + 1] - kx[cross]) * d[cross] / (d[cross] - d[cross + 1])
+    kx = np.unique(np.concatenate([kx, xc]))
+    kv = np.maximum(np.minimum(f_aff(kx), f_iso(kx)), 1.0 / 12)
     return {"type": "isotonic", "b": float(b), "knots_x": kx.tolist(), "knots_v": kv.tolist()}
 
 

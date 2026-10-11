@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- **Held-out FiveK test split (60 images) run with the configuration frozen**, reported in the README and `results/report_test.md`. Lossless ties JPEG XL; the hot tier is 0.40x the camera file; the error bound fails on 3 images.
+- **Noise model only lowered, never raised (D26).** The isotonic fallback was fitting image texture as noise at low ISO, so the hot tier discarded real detail and broke the error bound on 3 of 60 test images. The fallback now only lowers the model where validation finds it too high, uses only well-populated bins, and the affine fit drops bins well above it and bins below σ 0.5 DN. New textured synthetic harness: `bench/experiments/noise_texture.py`. Hot tier about 3% larger on the test set; lossless unchanged.
+- **Error bound at large steps (D27).** Bins whose middle DN would miss the bound are split (encoder-only). Step 2.0 had 474,031 violating pixels on the test set, now 0. Steps 0.5 and 1.0 are byte-identical.
+- **Held-out FiveK benchmark**, `results/fivek_benchmark.md`, and a fresh 60-image `holdout` split drawn after D26. On the holdout the hot tier is 0.41x the camera file, lossless ties JPEG XL (1.004x), and no pixel leaves the error bound. The first, pre-D26 test run is kept in `results/report_test_pre_d26.md`.
+- `bench.report` labels the split and flags uncommitted code in the commit line; `bench/experiments/heldout_charts.py` and `heldout_summary.py` produce the README charts and report tables.
 - Planes whose noise can't be estimated (too few unclipped flat blocks, e.g. a dark Leica M8 frame) no longer crash the encoder. They use the DNG noise profile if there is one, else a lossless model.
 - `bench.datasets` downloads FiveK files whose names contain spaces.
 - **Cross-plane L2 prediction (format default).** G2 is predicted from the surrounding G1, and R and B from the surrounding green plus the low-pass colour difference from L1. On the Sony A7 IV set the hot tier is 4.5-5% smaller at the default effort and 6-9% smaller at effort 7. Older files decode unchanged.

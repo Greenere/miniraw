@@ -1,7 +1,7 @@
-"""README charts (light and dark SVG) for the held-out FiveK test split.
+"""README charts (light and dark SVG) for a held-out FiveK split.
 
-    python -m bench.experiments.test_split_charts [REVIEW_DIR]
-Needs results/per_image/test/*.csv (bench.run --split test). Writes docs/img/fivek_test_*.svg, and PNGs to
+    python -m bench.experiments.heldout_charts SPLIT [REVIEW_DIR]
+Needs results/per_image/SPLIT/*.csv (bench.run --split SPLIT). Writes docs/img/fivek_SPLIT_*.svg, and PNGs to
 REVIEW_DIR if given. Only linear sources are plotted, as in the report's gate table.
 """
 import glob
@@ -21,8 +21,8 @@ STEPS = (0.5, 1.0, 1.5, 2.0)
 B5_BITS = (11, 10, 9, 8, 7)   # every linear image has these; 12-bit only exists for 14-bit sources
 
 
-def load():
-    df = pd.concat([pd.read_csv(f) for f in glob.glob(str(ROOT / "results" / "per_image" / "test" / "*.csv"))])
+def load(split):
+    df = pd.concat([pd.read_csv(f) for f in glob.glob(str(ROOT / "results" / "per_image" / split / "*.csv"))])
     df = df[df["lossy_source"].astype(str) == "False"].copy()
     df["hot"] = df.L0_bytes + df.L1_bytes + df.L2_bytes
     df["total"] = df.hot + df.L3_bytes
@@ -67,7 +67,7 @@ def size_chart(df, t, path):
     ax.set_xlim(0, 1.2)
     ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}×"))
     ax.set_xlabel("Size relative to the camera's raw file (one dot per image)", color=t["ink2"], fontsize=9)
-    fig.suptitle(f"Held-out FiveK test: size per image, {title(df)}", x=0.02, ha="left", color=t["ink"],
+    fig.suptitle(f"Held-out FiveK images: size per image, {title(df)}", x=0.02, ha="left", color=t["ink"],
                  fontsize=11, fontweight="bold")
     fig.tight_layout()
     fig.savefig(path, facecolor=t["surface"])
@@ -118,24 +118,24 @@ def quality_chart(df, t, path):
     leg = axes[1].legend(loc="lower left", fontsize=8, frameon=False, labelcolor=t["ink2"])
     for line in leg.get_lines():
         line.set_linewidth(2)
-    fig.suptitle(f"Held-out FiveK test: size versus error, median of {title(df)} (lower-left is better)",
+    fig.suptitle(f"Held-out FiveK images: size versus error, median of {title(df)} (lower-left is better)",
                  x=0.02, ha="left", color=t["ink"], fontsize=11, fontweight="bold")
     fig.tight_layout()
     fig.savefig(path, facecolor=t["surface"])
     plt.close(fig)
 
 
-def main(review=None):
-    df = load()
+def main(split, review=None):
+    df = load(split)
     OUT.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": ["Helvetica", "Arial", "DejaVu Sans"], "svg.fonttype": "path"})
     for mode, t in THEMES.items():
         for ext in ("svg",) + (("png",) if review else ()):
             dst = Path(review) if ext == "png" else OUT
-            size_chart(df, t, dst / f"fivek_test_size_{mode}.{ext}")
-            quality_chart(df, t, dst / f"fivek_test_quality_{mode}.{ext}")
-    print("wrote", sorted(p.name for p in OUT.glob("fivek_test_*.svg")))
+            size_chart(df, t, dst / f"fivek_{split}_size_{mode}.{ext}")
+            quality_chart(df, t, dst / f"fivek_{split}_quality_{mode}.{ext}")
+    print("wrote", sorted(p.name for p in OUT.glob(f"fivek_{split}_*.svg")))
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:2])
+    main(*sys.argv[1:3])

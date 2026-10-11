@@ -36,7 +36,18 @@ def forward_table(T, step, white=None):
     if white is not None and white < len(T):
         inc[white - 1:] = 1.0
     v = np.concatenate([[0.0], np.cumsum(inc)])
-    q = np.floor(v + 0.5)
+    q = np.floor(v + 0.5).astype(np.int64)
+    # The decoder reconstructs at the bin's middle DN, not its T-midpoint. Where T curves enough inside a wide bin
+    # (large steps), that point can miss the bound by up to ~0.01 sigma; split those bins (D27). Encoder-only:
+    # the decoder reads just the bin starts. No bin is split at the default step on any benchmark image.
+    for _ in range(32):
+        lo = lo_from_forward(q)
+        n, rec = tables_from_lo(lo, len(q) - 1)
+        bad = np.unique(q[bound_check(T, q, rec, step) > 1e-9])
+        bad = bad[n[bad] > 1]
+        if not len(bad):
+            break
+        q = forward_from_lo(np.sort(np.concatenate([lo, lo[bad] + n[bad] // 2])), len(q) - 1)
     # q never exceeds xmax, so a 16-bit table (and 16-bit q planes) suffices for 16-bit raws
     return q.astype(np.uint16 if q[-1] < 65536 else np.int64)
 

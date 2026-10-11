@@ -88,49 +88,63 @@ These figures come from one camera. The 20-camera dev set (older 2003-2009 senso
 [results/report.md](results/report.md), and this set's full report is in
 [results/report_personal_raws.md](results/report_personal_raws.md).
 
-### Held-out test: 60 MIT-Adobe FiveK images
+### Held-out benchmark: MIT-Adobe FiveK
 
-The figures above come from files that were used to tune the codec. To check how they generalize, the
-configuration was frozen and run once on 60 FiveK DNGs set aside for testing (2003-2009 Canon, Leica, Nikon
-and Sony cameras). Sizes are medians over the 41 images that are true linear raw, from 14 cameras. The other 19
-were processed in camera (companded, with gaps in the histogram) and are reported separately. Brackets are 95%
-bootstrap intervals.
+The figures above come from the files the codec was tuned on. To check how they generalize, MiniRaw was run once,
+with its configuration frozen, on 60 FiveK DNGs it had never seen (2003-2009 Canon, Leica, Nikon and Sony
+cameras). 40 of them are true linear raw, from 14 cameras. The other 20 were processed in camera, so they are
+checked for exactness but left out of the size statistics. Figures are medians over images, with 95% bootstrap
+intervals.
 
-| | Ratio | Interval |
+| Ratio | Median | Interval |
 | --- | --- | --- |
-| Hot tier (L0-L2) / camera raw file | **0.40** | [0.36, 0.42] |
-| Hot tier / JPEG XL lossless | 0.47 | [0.40, 0.49] |
-| All layers, sensor-exact / camera raw file | 0.88 | [0.86, 0.89] |
+| Hot tier (L0-L2) / camera raw file | **0.41** | [0.36, 0.43] |
+| Hot tier / JPEG XL lossless | 0.47 | [0.41, 0.52] |
+| All layers, sensor-exact / camera raw file | 0.86 | [0.84, 0.89] |
 | All layers / JPEG XL lossless | **1.00** | [1.00, 1.01] |
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_test_size_dark.svg">
-  <img alt="Strip chart of size relative to the camera's raw file, one dot per image for 41 held-out FiveK images from 14 cameras. JPEG XL lossless: median 0.87x, range 0.78 to 0.94. MiniRaw all layers, bit-exact: median 0.88x, overlapping JPEG XL. MiniRaw hot tier at step 1.0: median 0.40x, range 0.28 to 0.51." src="docs/img/fivek_test_size_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_holdout_size_dark.svg">
+  <img alt="Strip chart of size relative to the camera's raw file, one dot per image for 40 held-out FiveK images from 14 cameras. JPEG XL lossless: median 0.86x, range 0.79 to 0.93. MiniRaw all layers, bit-exact: median 0.86x, range 0.79 to 1.00, overlapping JPEG XL. MiniRaw hot tier at step 1.0: median 0.41x, range 0.27 to 0.54." src="docs/img/fivek_holdout_size_light.svg">
 </picture>
 
 What held up:
-- **The hot tier is 60% smaller than the camera's file**, with the worst pixel at 0.61 sigma (median over
-  images).
+- **The hot tier is 59% smaller than the camera's file**, with the worst pixel at 0.61 sigma, and no pixel
+  outside the error bound at any step from 0.5 to 2.0.
 - **Every exact decode matched its SHA-256** (60/60), as did region decodes and strip-and-restore.
-- **Worst-case error is still where MiniRaw wins.** Within MiniRaw's step range (0.5-2.0), at the same average
-  error as the square-root curve the sizes tie; at the same worst-case error the square-root curve is 16-35%
-  larger.
+- **Worst-case error is where MiniRaw wins.** At the same average error as the square-root curve the sizes tie;
+  at the same worst-case error the curve is 12-40% larger (within MiniRaw's step range).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_test_quality_dark.svg">
-  <img alt="Two line charts of error against median bits per pixel on the held-out FiveK images. Worst-case error: MiniRaw runs from 1.07 sigma at 1.96 bpp to 0.37 sigma at 3.68 bpp, with the default step 1.0 at 2.74 bpp and 0.61 sigma; the square-root curve runs from 2.3 sigma at 1.88 bpp to 0.15 sigma at 5.46 bpp and stays above MiniRaw at every size. Average error: the two curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_test_quality_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_holdout_quality_dark.svg">
+  <img alt="Two line charts of error against median bits per pixel on 40 held-out FiveK images. Worst-case error: MiniRaw runs from 1.08 sigma at 2.07 bpp to 0.41 sigma at 3.71 bpp, with the default step 1.0 at 2.78 bpp and 0.61 sigma; the square-root curve runs from 2.52 sigma at 1.81 bpp to 0.17 sigma at 5.37 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the two curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_holdout_quality_light.svg">
 </picture>
 
 What didn't:
-- **Lossless is a tie with JPEG XL, not a win.** The 2% saving above is specific to the Sony A7 IV files.
-- **The per-pixel error bound failed on 3 of the 60 images** (Canon 30D, Canon 5D, Leica M8): 6,867 pixels,
-  0.001% of the total, with the worst at 0.62 sigma against a bound of 0.5 sigma plus 1 DN. All three used the
-  isotonic fallback noise model.
-- **The noise model needed the isotonic fallback on 47 of 60 images**, and a few planes produced degenerate
-  fits. Improving the estimator on older sensors is the next step.
+- **Lossless ties JPEG XL; it doesn't beat it.** The 2% saving above is specific to the Sony A7 IV files. One
+  Leica D-LUX 3 frame is 15% larger than JPEG XL, for reasons not yet found.
+- **Two spec checks fail.** The per-decile bias is 0.096 sigma against a 0.02 limit (a known offset of the spec's
+  reconstruction). The RMSE limit of 0.32 sigma is missed by one very dark frame (0.321), where most bins are
+  only 1-3 DN wide.
+- **The noise estimate is still somewhat high on textured, low-noise images.** On a textured synthetic test,
+  sigma comes out about 10% high in the median case.
 
-Full report: [results/report_test.md](results/report_test.md). Encode and decode times there are from an Apple
-M4 Pro, so they aren't comparable to the M1 timings above.
+**How the benchmark got here.** These are the second set of held-out results. The first run, on a different 60
+images, broke the error bound on 3 images and crashed on one. The cause was the noise model fitting image texture
+as noise at low ISO, which made the hot tier discard real detail. The fix (D26 and D27 in
+[DEVIATIONS.md](results/DEVIATIONS.md)) only ever lowers the noise model, never raises it. It was developed on the
+dev images and a new textured synthetic test. Because the first 60 images had then influenced the design, a fresh
+set of 60 was drawn and run once; that is the set reported here.
+
+| First test set, 60 images | Before the fix | After |
+| --- | --- | --- |
+| Pixels outside the error bound (step 1.0 / step 2.0) | 6,867 / 474,031 | 0 / 0 |
+| Images where the noise model was corrected | 47, raised to fit texture | 24, lowered only |
+| Hot tier / JPEG XL lossless | 0.468 | 0.483 (keeps the detail it was discarding) |
+
+Full write-up: [results/fivek_benchmark.md](results/fivek_benchmark.md). The A7 IV figures earlier in this section
+predate the fix and have not been re-measured. The FiveK timings come from an Apple M4 Pro, so they aren't
+compared with the M1 timings above.
 
 To regenerate the charts from your own files:
 
@@ -249,6 +263,9 @@ python -m bench.datasets --split dev        # 20 FiveK DNGs, one per camera (~20
 python -m bench.run --split dev             # per-image CSVs in results/per_image/dev/ (resumable)
 python -m bench.report --split dev          # results/report.md
 ```
+
+The same commands take `--split test` and `--split holdout` (60 images each). The held-out results and how to
+reproduce them are in [results/fivek_benchmark.md](results/fivek_benchmark.md).
 
 Settings live in `configs/phase1.toml`. Every departure from the spec is in
 [results/DEVIATIONS.md](results/DEVIATIONS.md).

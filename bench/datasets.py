@@ -30,7 +30,7 @@ def load_meta():
     return d
 
 
-def make_splits(n_dev=20, n_test=60, seed=0):
+def make_splits(n_dev=20, n_test=60, n_holdout=60, seed=0):
     meta = load_meta()
     by_cam = defaultdict(list)
     for k in sorted(meta):
@@ -48,11 +48,20 @@ def make_splits(n_dev=20, n_test=60, seed=0):
             if i < len(by_cam[c]) and len(test) < n_test:
                 test.append(by_cam[c][i])
         i += 1
-    assert not set(dev) & set(test)
+    # Holdout: the same round-robin continued, added after the test split had been looked at (D26).
+    holdout, j = [], i
+    while len(holdout) < n_holdout:
+        for c in cams[:n_dev]:
+            k = by_cam[c][j] if j < len(by_cam[c]) else None
+            if k and k not in test and len(holdout) < n_holdout:
+                holdout.append(k)
+        j += 1
+    assert not set(dev) & set(test) and not (set(dev) | set(test)) & set(holdout)
     SPLITS.mkdir(exist_ok=True)
     (SPLITS / "dev.txt").write_text("\n".join(dev) + "\n")
     (SPLITS / "test.txt").write_text("\n".join(test) + "\n")
-    return dev, test
+    (SPLITS / "holdout.txt").write_text("\n".join(holdout) + "\n")
+    return dev, test, holdout
 
 
 def read_split(name):
@@ -89,7 +98,7 @@ def camera_of(key):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", default="dev", choices=["dev", "test"])
+    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout"])
     ap.add_argument("--make-splits", action="store_true")
     a = ap.parse_args()
     if a.make_splits or not (SPLITS / "dev.txt").exists():
