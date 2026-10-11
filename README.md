@@ -22,12 +22,25 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ## CLI
 
 ```sh
-miniraw encode IN.dng OUT.mraw [--step 1.0] [--no-l3]
-miniraw decode IN.mraw OUT.npy --mode index|preview|signal|exact [--region x,y,w,h] [--dither] [--sidecar F.l3]
+miniraw encode IN.ARW OUT.mraw [--step 1.0] [--effort 4] [--no-l3] [--threads N]
+
+# decode: the output type follows the extension
+miniraw decode IN.mraw OUT.dng                 # raw again: bit-exact sensor data (verified), lossless-JPEG DNG
+miniraw decode IN.mraw OUT.jpg                 # developed with LibRaw, camera WB, EXIF kept
+miniraw decode IN.mraw OUT.png --bits 16       # also .tif; --exposure EV, --half-size, --no-auto-bright
+miniraw decode IN.mraw thumb.jpg --mode preview      # from the base layer only (~40 ms)
+miniraw decode IN.mraw crop.jpg --region x,y,w,h     # reads only the touched tiles
+miniraw decode IN.mraw OUT.npy | OUT.json      # raw mosaic array | header
 miniraw info IN.mraw
 miniraw strip IN.mraw        # drop L3 in place
-miniraw split IN.mraw        # move L3 to IN.mraw.l3
+miniraw split IN.mraw        # move L3 to IN.mraw.l3 (decode with --sidecar IN.mraw.l3)
 ```
+
+Default decode modes: `exact` for `.dng` and `.npy` when L3 is present (`signal` with a note if the file is
+stripped), `signal` for images (visually identical, about twice as fast). The DNG carries the colour matrix,
+white balance, black and white levels, default crop, orientation and capture EXIF recorded at encode time.
+It reproduces the sensor data exactly, not the original file's bytes: proprietary containers (ARW, NEF, CR3)
+also hold maker notes, previews and camera-specific compression, which are not stored.
 
 ## Try it on your own raw file
 

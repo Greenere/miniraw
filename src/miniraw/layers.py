@@ -23,12 +23,12 @@ def l1_from_q(q, k):
     """Floor-mean of q over k x k blocks; partial edge blocks average what they hold."""
     h, w = q.shape
     hb, wb = -(-h // k), -(-w // k)
-    s = np.zeros((hb, wb), np.int64)
-    cnt = np.zeros((hb, wb), np.int64)
-    ri, ci = np.arange(h) // k, np.arange(w) // k
-    np.add.at(s, (ri[:, None], ci[None, :]), q.astype(np.int64))
-    np.add.at(cnt, (ri[:, None], ci[None, :]), 1)
-    return s // cnt
+    pad = np.zeros((hb * k, wb * k), np.int64)
+    pad[:h, :w] = q
+    s = pad.reshape(hb, k, wb, k).sum(axis=(1, 3))
+    rows = np.minimum(k, h - np.arange(hb) * k)
+    cols = np.minimum(k, w - np.arange(wb) * k)
+    return s // (rows[:, None] * cols[None, :])
 
 
 def _bilinear_axis(idx, k, n):
@@ -48,9 +48,12 @@ def upsample(l1, k, rows, cols, method):
         return l1[rows[:, None], cols[None, :]]
     y0, y1, wy0, wy1 = _bilinear_axis(rows, k, l1.shape[0])
     x0, x1, wx0, wx1 = _bilinear_axis(cols, k, l1.shape[1])
-    a = l1[y0[:, None], x0[None, :]] * wx0 + l1[y0[:, None], x1[None, :]] * wx1
-    b = l1[y1[:, None], x0[None, :]] * wx0 + l1[y1[:, None], x1[None, :]] * wx1
-    acc = a * wy0[:, None] + b * wy1[:, None]
+    # Separable: interpolate the few L1 rows needed horizontally, then vertically.
+    # Integer arithmetic, so this equals the 2-D weighted sum exactly.
+    r0, r1 = min(y0.min(), y1.min()), max(y0.max(), y1.max()) + 1
+    src = l1[r0:r1]
+    hrow = src[:, x0] * wx0 + src[:, x1] * wx1
+    acc = hrow[y0 - r0] * wy0[:, None] + hrow[y1 - r0] * wy1[:, None]
     shift = 2 * (2 * k).bit_length() - 2           # log2((2k)^2)
     return (acc + (1 << (shift - 1))) >> shift
 

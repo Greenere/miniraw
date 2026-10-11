@@ -93,7 +93,8 @@ def run_image(key, cfg, split, path=None, quick=False):
     te = time.time()
     enc = dict(tile=T, effort=E, upsampler=cfg["upsampler"], l1_mode=cfg["l1_mode"], rec=cfg["rec"],
                packing=cfg["packing"], l1_min_side=cfg["l1_min_side"])
-    data, info = codec.encode(raw, step=step, source={"file": path.name, "camera": row["camera"]}, **enc)
+    data, info = codec.encode(raw, step=step, source={"file": path.name, "camera": row["camera"]},
+                              diagnostics=True, **enc)
     row["encode_s"] = time.time() - te
     models = [pi["model"] for pi in info["planes"]]
     sz = _sizes(data)

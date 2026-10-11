@@ -21,6 +21,10 @@ class RawImage:
     color_matrix: list = None     # 3x3 camera->sRGB, if available
     noise_profile: list = None    # DNG NoiseProfile (S, O) pairs, if present
     meta: dict = field(default_factory=dict)
+    cam_xyz: list = None          # 3x3 XYZ -> camera matrix (DNG ColorMatrix1), if known
+    flip: int = 0                 # LibRaw orientation code: 0, 3 (180), 5 (90 CCW), 6 (90 CW)
+    crop: list = None             # default crop [left, top, width, height] in sensor pixels
+    exif: dict = field(default_factory=dict)
 
     @property
     def sensor_shape(self):
@@ -67,6 +71,34 @@ def read_noise_profile(path):
     return None
 
 
+def read_exif(path):
+    """Basic capture metadata from TIFF-based raws (ARW, NEF, CR2, DNG, ...); {} otherwise."""
+    try:
+        import tifffile
+        with tifffile.TiffFile(path) as tf:
+            tags = tf.pages[0].tags
+            out = {}
+            for name in ("Make", "Model", "DateTime"):
+                t = tags.get(name)
+                if t is not None:
+                    out[name] = str(t.value).strip().strip("\x00")
+            ex = tags.get("ExifTag")
+            ex = ex.value if ex is not None else {}
+            for name in ("ExposureTime", "FNumber", "FocalLength"):
+                v = ex.get(name)
+                if isinstance(v, tuple) and len(v) == 2 and v[1]:
+                    out[name] = [int(v[0]), int(v[1])]
+            iso = ex.get("ISOSpeedRatings")
+            if iso is not None:
+                out["ISO"] = int(iso[0] if isinstance(iso, (tuple, list)) else iso)
+            for name in ("DateTimeOriginal", "LensModel"):
+                if ex.get(name):
+                    out[name] = str(ex[name]).strip().strip("\x00")
+            return out
+    except Exception:
+        return {}
+
+
 def read(path):
     import rawpy
 
@@ -92,10 +124,17 @@ def read(path):
         except Exception:
             pass
         meta = {"color_desc": desc, "raw_type": str(r.raw_type)}
+        cam_xyz = np.array(r.rgb_xyz_matrix)[:3, :3]
+        cam_xyz = cam_xyz.tolist() if np.abs(cam_xyz).sum() > 0 else None
+        sz = r.sizes
+        flip = int(sz.flip)
+        crop = None
+        if sz.crop_width and sz.crop_height:
+            crop = [int(sz.crop_left_margin), int(sz.crop_top_margin), int(sz.crop_width), int(sz.crop_height)]
     planes = pack(mosaic, offsets)
     bit_depth = int(max(white, int(planes.max()))).bit_length()
     return RawImage(planes, offsets, black, white, bit_depth, wb, cm,
-                    read_noise_profile(path), meta)
+                    read_noise_profile(path), meta, cam_xyz, flip, crop, read_exif(path))
 
 
 GAP_THRESHOLD = 0.05

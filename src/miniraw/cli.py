@@ -1,18 +1,21 @@
 """miniraw command line.
 
     miniraw encode IN.dng OUT.mraw [--step 1.0] [--no-l3]
-    miniraw decode IN.mraw OUT.npy --mode index|preview|signal|exact [--region x,y,w,h] [--dither] [--sidecar F]
+    miniraw decode IN.mraw OUT.{dng,jpg,png,tif,npy,json} [--mode preview|signal|exact] [--region x,y,w,h]
+                   [--exposure EV] [--quality Q] [--bits 8|16] [--half-size] [--uncompressed] [--sidecar F]
     miniraw info IN.mraw
     miniraw strip IN.mraw
     miniraw split IN.mraw
 """
 import argparse
 import json
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
-from . import codec, container, io_raw
+from . import codec, container, export, io_raw
 
 
 def main(argv=None):
@@ -23,30 +26,35 @@ def main(argv=None):
     e.add_argument("dst")
     e.add_argument("--step", type=float, default=1.0)
     e.add_argument("--no-l3", action="store_true")
-    d = sub.add_parser("decode")
+    e.add_argument("--effort", type=int, default=4, help="JPEG XL effort 1-9 (default 4; 7 is ~2x slower, ~1.7%% smaller hot tier)")
+    e.add_argument("--threads", type=int, help="worker threads (default: up to 8 cores)")
+    d = sub.add_parser("decode", help="decode to DNG (raw), JPEG/PNG/TIFF (developed), .npy (mosaic) or .json (header)")
     d.add_argument("src")
-    d.add_argument("dst")
-    d.add_argument("--mode", default="signal", choices=["index", "preview", "signal", "exact"])
-    d.add_argument("--region")
-    d.add_argument("--dither", action="store_true")
-    d.add_argument("--sidecar")
+    d.add_argument("dst", help="output; the type follows the extension")
+    d.add_argument("--mode", choices=["index", "preview", "signal", "exact"],
+                   help="layers to decode (default: exact for .dng/.npy when L3 is present, signal for images)")
+    d.add_argument("--region", help="x,y,w,h in sensor pixels (.npy, .dng and images)")
+    d.add_argument("--dither", action="store_true", help="signal mode: random value within each bin")
+    d.add_argument("--sidecar", help=".mraw.l3 file for exact decoding of a split file")
+    d.add_argument("--threads", type=int)
+    d.add_argument("--exposure", type=float, default=0.0, help="images: exposure shift in EV")
+    d.add_argument("--quality", type=int, default=92, help="JPEG quality")
+    d.add_argument("--bits", type=int, choices=[8, 16], default=8, help="PNG/TIFF bit depth")
+    d.add_argument("--half-size", action="store_true", help="images: develop at half resolution (fast)")
+    d.add_argument("--no-auto-bright", action="store_true", help="images: disable LibRaw auto brightness")
+    d.add_argument("--uncompressed", action="store_true", help="DNG: write uncompressed instead of lossless JPEG")
     for name in ("info", "strip", "split"):
         sub.add_parser(name).add_argument("src")
     a = ap.parse_args(argv)
 
     if a.cmd == "encode":
         raw = io_raw.read(a.src)
-        data, _ = codec.encode(raw, step=a.step, with_l3=not a.no_l3,
-                               source={"file": Path(a.src).name})
+        data, _ = codec.encode(raw, step=a.step, with_l3=not a.no_l3, effort=a.effort,
+                               threads=a.threads, source={"file": Path(a.src).name})
         Path(a.dst).write_bytes(data)
         _print_info(data)
     elif a.cmd == "decode":
-        region = tuple(int(v) for v in a.region.split(",")) if a.region else None
-        out = codec.decode(a.src, a.mode, region, a.dither, sidecar=a.sidecar)
-        if a.mode == "index":
-            Path(a.dst).write_text(json.dumps(_jsonable(out), indent=1))
-        else:
-            np.save(a.dst, out)
+        _decode(a)
     elif a.cmd == "info":
         _print_info(Path(a.src).read_bytes())
     elif a.cmd in ("strip", "split"):
@@ -56,6 +64,54 @@ def main(argv=None):
             Path(a.src + ".l3").write_bytes(l3)
         Path(a.src).write_bytes(hot)
         print(f"hot {len(hot)} B, L3 {len(l3)} B" + (" -> " + a.src + ".l3" if a.cmd == "split" else " dropped"))
+
+
+def _decode(a):
+    t0 = time.perf_counter()
+    ext = Path(a.dst).suffix.lower()
+    region = tuple(int(v) for v in a.region.split(",")) if a.region else None
+    reader = container.RangeReader(a.src, a.sidecar)
+    dec = codec.Decoder(reader, a.threads)
+    hd = reader.header
+    mode = a.mode
+    if ext == ".json" or mode == "index":
+        Path(a.dst).write_text(json.dumps(_jsonable(hd), indent=1))
+        return print(f"wrote header to {a.dst}")
+    if mode is None:
+        mode = "exact" if ext in (".dng", ".npy") and reader.has_l3 else "signal"
+        if ext == ".dng" and not reader.has_l3:
+            print("note: L3 not present (stripped); writing the signal-mode DNG, which is near-lossless, not "
+                  "bit-exact. Pass --sidecar FILE.mraw.l3 for the exact original.", file=sys.stderr)
+    if mode == "exact" and not reader.has_l3:
+        sys.exit("exact mode needs L3: this file is stripped; pass --sidecar FILE.mraw.l3")
+
+    if mode == "preview":
+        if region:
+            sys.exit("--region is not supported with preview")
+        mosaic, hd = dec.preview_mosaic()
+    else:
+        mosaic = dec.mosaic(mode, region, a.dither)
+        if region:
+            hd = {**hd, "sensor": {**hd["sensor"], "crop": None}}
+
+    if ext == ".npy":
+        np.save(a.dst, mosaic)
+    elif ext == ".dng":
+        data = export.dng_bytes(mosaic, hd, compress=not a.uncompressed)
+        Path(a.dst).write_bytes(data)
+        if mode == "exact" and region is None:
+            import hashlib
+            ok = hashlib.sha256(mosaic.astype("<u2").tobytes()).hexdigest() == hd["source"]["sha256"]
+            print(f"sensor data verified against the original's SHA-256: {'OK' if ok else 'MISMATCH'}")
+    elif ext in export.IMAGE_EXT:
+        bits = 8 if ext in (".jpg", ".jpeg") else a.bits
+        rgb = export.develop(mosaic, hd, a.exposure, bits, a.half_size, not a.no_auto_bright)
+        export.save_image(a.dst, rgb, hd, a.quality)
+    else:
+        sys.exit(f"unsupported output extension {ext!r}: use .dng, .jpg, .png, .tif, .npy or .json")
+    size = Path(a.dst).stat().st_size
+    print(f"wrote {a.dst} ({mode} mode, {mosaic.shape[1]}x{mosaic.shape[0]} mosaic, "
+          f"{size / 1e6:.1f} MB) in {time.perf_counter() - t0:.2f} s")
 
 
 def _print_info(data):

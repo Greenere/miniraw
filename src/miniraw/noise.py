@@ -17,16 +17,29 @@ MIN_KEPT = 8          # kept blocks needed for a bin to enter the fit
 MIN_KEPT_VALIDATE = 50
 
 
-def _block_stats(plane, white):
+def _extract(plane, white):
+    """Unclipped 8x8 blocks (raw integer values) and their means."""
     h, w = plane.shape
     h, w = h - h % BLOCK, w - w % BLOCK
-    blk = plane[:h, :w].astype(np.float64).reshape(h // BLOCK, BLOCK, w // BLOCK, BLOCK)
-    blk = blk.transpose(0, 2, 1, 3).reshape(-1, BLOCK, BLOCK)
+    blk = plane[:h, :w].reshape(h // BLOCK, BLOCK, w // BLOCK, BLOCK).transpose(0, 2, 1, 3)
+    blk = blk.reshape(-1, BLOCK, BLOCK)
     ok = (blk.min(axis=(1, 2)) > 0) & (blk.max(axis=(1, 2)) < 0.98 * white)
     blk = blk[ok]
-    mean = blk.mean(axis=(1, 2))
-    var = _robust_var(blk)
-    return mean, var
+    return blk, blk.mean(axis=(1, 2), dtype=np.float64)
+
+
+def _block_stats(plane, white):
+    blk, mean = _extract(plane, white)
+    return mean, _robust_var(blk)
+
+
+def _median_rows(d):
+    """Row medians via one partition (equal to np.median along axis 1)."""
+    m = d.shape[1]
+    if m % 2:
+        return np.partition(d, m // 2, axis=1)[:, m // 2]
+    part = np.partition(d, [m // 2 - 1, m // 2], axis=1)
+    return (part[:, m // 2 - 1] + part[:, m // 2]) / 2
 
 
 def _robust_var(blk):
@@ -36,11 +49,13 @@ def _robust_var(blk):
     texture leaks far less into the estimate than with neighbour differences.
     Its output has variance 36 * sigma^2 for white noise.
     """
+    # float32 is exact here: |Laplacian| of 16-bit integers stays below 2**24
+    blk = blk.astype(np.float32) if blk.dtype != np.float64 else blk
     d = (blk[:, :-2, :-2] - 2 * blk[:, :-2, 1:-1] + blk[:, :-2, 2:]
          - 2 * blk[:, 1:-1, :-2] + 4 * blk[:, 1:-1, 1:-1] - 2 * blk[:, 1:-1, 2:]
          + blk[:, 2:, :-2] - 2 * blk[:, 2:, 1:-1] + blk[:, 2:, 2:]).reshape(len(blk), -1)
-    med = np.median(d, axis=1, keepdims=True)
-    mad = np.median(np.abs(d - med), axis=1)
+    med = _median_rows(d)[:, None]
+    mad = _median_rows(np.abs(d - med)).astype(np.float64)
     return (1.4826 * mad / 6.0) ** 2
 
 
@@ -114,27 +129,29 @@ def variance_fn(model):
     return lambda x: np.interp(np.asarray(x, float), kx, kv)
 
 
-def stabilized_sigma_by_bin(plane, model, white, table_T):
-    """Per-bin flat-block sigma after mapping through T (float table)."""
-    mean, _ = _block_stats(plane, white)
-    h, w = plane.shape
-    h, w = h - h % BLOCK, w - w % BLOCK
-    blk = plane[:h, :w].reshape(h // BLOCK, BLOCK, w // BLOCK, BLOCK).transpose(0, 2, 1, 3)
-    blk = blk.reshape(-1, BLOCK, BLOCK)
-    ok = (blk.min(axis=(1, 2)) > 0) & (blk.max(axis=(1, 2)) < 0.98 * white)
-    tv = _robust_var(table_T[blk[ok]])
+def stabilized_sigma_by_bin(plane, model, white, table_T, blocks=None):
+    """Per-bin flat-block sigma after mapping through T (float table).
+
+    blocks: (blk, mean) from estimate(), to avoid re-extracting them.
+    """
+    blk, mean = blocks if blocks is not None else _extract(plane, white)
+    tv = _robust_var(table_T.astype(np.float32)[blk])
     xs, vs, ws = _binned(mean, tv, model["b"], white, MIN_KEPT_VALIDATE)
     return xs, np.sqrt(vs), ws
 
 
-def estimate(plane, b, white):
-    """Fit the affine model for one plane. Returns a model dict plus the binned data."""
-    mean, var = _block_stats(plane, white)
+def estimate(plane, b, white, return_blocks=False):
+    """Fit the affine model for one plane. Returns a model dict plus the binned data
+    (and the extracted blocks, for reuse in validation, if return_blocks)."""
+    blk, mean = _extract(plane, white)
+    var = _robust_var(blk)
     xs, vs, ws = _binned(mean, var, b, white)
     if len(xs) < 2:
         raise ValueError("too few flat blocks to estimate noise")
     a, c = fit_affine(xs, vs, ws, b)
     model = {"type": "affine", "a": a, "b": float(b), "c": c}
+    if return_blocks:
+        return model, (xs, vs, ws), (blk, mean)
     return model, (xs, vs, ws)
 
 

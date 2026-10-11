@@ -69,6 +69,25 @@ That run is archived in `results/per_image/dev_specA/`. It used construction A, 
 - **D22. Smaller base layer: L1 shorter side of at least 128 px instead of 256.** With the spec's rule, G3 failed (1.048). Halving the L1 resolution gave 1.025 [1.014, 1.031] under P1 packing. Under P3 it gives 1.036 [1.013, 1.072], because packing helps q coded directly more than the L1 residual. L1 is then about 57 KB, with a shorter side still above a 224 px CLIP input for most sensors. Halving again (L1 near 64 to 128 px, 18 KB) gives 1.013. That passes G3, but it is probably too small for a good embedding, so it is left as a product decision. The setting is `l1_min_side`.
 - **Measured, not adopted: a context-modelled L3** (`bench/experiments/l3_context.py`). The context is where the 3x3 mean of signal-mode neighbours falls relative to the pixel's bin. It lowers the ideal L3 cost by a median 0.050 bpp (0.22 bpp on the noise-reduced Leica D-LUX 3), about half of G1's overhead, before the cost of storing tables. That is under 1% of the file and touches only the cold tier, so it is deferred.
 
-## Environment
+## Speed (encode/decode are byte-identical to the earlier code)
+
+- **D23. Faster encode and decode.** A 33 MP Sony A7 IV file on an Apple M1 (`bench/experiments/profile_stages.py`):
+
+  | | Before | After |
+  | --- | --- | --- |
+  | Encode, effort 7 | 14.6 s | 2.9 s |
+  | Encode, effort 4 | — | 1.4 s |
+  | Encode, effort 4, cached noise model | — | 0.9 s |
+  | Exact decode | 2.7 s | 0.66 s |
+  | Signal decode | — | 0.27 s |
+  | 1024x1024 region | — | 53 ms |
+
+  The changes:
+  - Planes are fitted in parallel, and each tile (residual, L3 range coding, JPEG XL) is a thread-pool job; decode does the same. Output is identical for any thread count, and imagecodecs releases the GIL.
+  - Noise blocks are extracted once and reused for validation, residuals use float32 (exact for these integers), and medians use a single partition. Estimates are identical.
+  - Re-validating the isotonic fallback is skipped unless `diagnostics=True` (the benchmark runner sets it).
+  - L1 is built with a reshape-sum and upsampled separably. Both are bit-identical to the earlier code.
+  - The codec and CLI default to JPEG XL effort 4. That gives a 1.7% larger hot tier at half the encode time; the effort curve is in `bench/experiments`. The benchmark config keeps effort 7 for both MiniRaw and the baselines.
+
 
 - **D16. Platform.** macOS arm64 (Apple M1) with Python 3.14, not Linux with Python 3.11. libjxl 0.12.0 via imagecodecs, used for both MiniRaw and the baselines.

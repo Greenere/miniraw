@@ -3,44 +3,83 @@
 Decoding uses only integer arithmetic and tables stored in the file (spec 4).
 """
 import hashlib
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 from . import container, entropy, io_raw, layers, noise, vst
 
-DEFAULTS = dict(step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear", with_l3=True)
-
-
 def mosaic_sha256(planes, offsets):
     return hashlib.sha256(io_raw.unpack(planes, offsets).astype("<u2").tobytes()).hexdigest()
 
 
-def fit_noise(plane, b, white, noise_profile=None, plane_index=0):
-    """Noise model for one plane, with validation and isotonic fallback (spec 4.2)."""
+def fit_noise(plane, b, white, noise_profile=None, plane_index=0, diagnostics=True):
+    """Noise model for one plane, with validation and isotonic fallback (spec 4.2).
+
+    diagnostics=False skips re-validating the isotonic fallback (report-only data).
+    """
     xmax = int(max(white, int(plane.max())))
-    model, (xs, vs, ws) = noise.estimate(plane, b, white)
+    model, (xs, vs, ws), blocks = noise.estimate(plane, b, white, return_blocks=True)
     info = {"estimated": dict(model)}
     if noise_profile:
         npm = noise.from_noise_profile(noise_profile, plane_index, b, white)
         info["noise_profile_disagreement"] = noise.disagreement(npm, model, white)
         model = npm
     T = vst.T_table(model, xmax)
-    _, sig, _ = noise.stabilized_sigma_by_bin(plane, model, white, T)
+    _, sig, _ = noise.stabilized_sigma_by_bin(plane, model, white, T, blocks)
     info["validate_sigma"] = sig.tolist()
     ok = len(sig) > 0 and bool(np.all((sig >= 0.9) & (sig <= 1.1)))
     info["validated"] = ok
     if not ok:
         model = noise.isotonic_model(xs, vs, ws, b, xmax)
         T = vst.T_table(model, xmax)
-        _, sig2, _ = noise.stabilized_sigma_by_bin(plane, model, white, T)
-        info["validate_sigma_isotonic"] = sig2.tolist()
+        if diagnostics:
+            _, sig2, _ = noise.stabilized_sigma_by_bin(plane, model, white, T, blocks)
+            info["validate_sigma_isotonic"] = sig2.tolist()
     info["model"] = model
     return model, T, info
 
 
-def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
+def default_threads():
+    return min(8, os.cpu_count() or 1)
+
+
+def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics):
+    """Noise model, tables, q and L1 for one plane (runs in a worker thread)."""
+    x = raw.planes[p]
+    b, white = raw.black[p], raw.white
+    xmax = int(max(white, int(x.max())))
+    if models is None:
+        model, T, pinfo = fit_noise(x, b, white, raw.noise_profile, p, diagnostics)
+    else:
+        model, pinfo = models[p], {"model": models[p], "validated": None}
+        T = vst.T_table(model, xmax)
+    fwd = vst.forward_table(T, step, white)
+    lo = vst.lo_from_forward(fwd)
+    n, _ = vst.tables_from_lo(lo, xmax)
+    q = fwd[x]
+    deltas = vst.encode_lo(lo)
+    assert deltas.max(initial=0) < 65536
+    pinfo.update(T=T, fwd=fwd, q=q, nq=len(lo))
+    st = {"x": x, "q": q, "lo": lo, "n": n, "info": pinfo, "l1": None, "coeffs": None,
+          "hdr": {"xmax": xmax, "lo": deltas.astype("<u2").tobytes(), "model": model}}
+    if use_l1 and l1_mode == "mean":
+        st["l1"] = layers.l1_from_q(q, k)
+    elif use_l1:
+        st["l1"] = np.zeros((-(-x.shape[0] // k), -(-x.shape[1] // k)), np.int64)
+        st["coeffs"] = {}
+        for ty, tx, y0, x0, th, tw in grid:
+            c, (lh, lw) = layers.dwt53(q[y0:y0 + th, x0:x0 + tw], levels)
+            st["l1"][y0 // k:y0 // k + lh, x0 // k:x0 // k + lw] = c[:lh, :lw]
+            c[:lh, :lw] = 0
+            st["coeffs"][ty, tx] = c
+    return st
+
+
+def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
            with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None,
-           packing="P3", l1_min_side=128):
+           packing="P3", l1_min_side=128, threads=None, diagnostics=False):
     """Encode a RawImage. `models` (per-plane noise model dicts) skips estimation.
 
     l1_mode "mean" is construction A (floor-mean L1, L2 codes q - up(L1));
@@ -49,91 +88,71 @@ def encode(raw, step=1.0, tile=512, effort=7, use_l1=True, upsampler="bilinear",
     l1_min_side sets k: the largest power of two keeping L1's shorter side >= it.
     rec selects the signal-mode reconstruction: "floor" is spec 4.3's lo + (n-1)//2;
     "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17).
+    threads: worker threads for planes and tiles (output is identical for any value).
+    diagnostics: also re-validate isotonic fallbacks (benchmark reporting only).
 
     Returns (file bytes, info dict). info holds per-plane T tables and q planes
     for the benchmark's metrics; they are not part of the file.
     """
     planes = raw.planes
     pshape = planes.shape[1:]
-    rec_mode = rec
     k = (k or layers.choose_k(pshape, l1_min_side)) if use_l1 else 0
-    groups = layers.PACKINGS[packing]
-    payloads = [{} for _ in range(4)]
     levels = k.bit_length() - 1 if use_l1 else 0
     if use_l1 and l1_mode == "wavelet" and tile is not None:
         assert tile % k == 0
-    sections, plane_hdr, info = [], [], {"planes": []}
-    for p in range(4):
-        x = planes[p]
-        b, white = raw.black[p], raw.white
-        xmax = int(max(white, int(x.max())))
-        if models is None:
-            model, T, pinfo = fit_noise(x, b, white, raw.noise_profile, p)
-        else:
-            model, pinfo = models[p], {"model": models[p], "validated": None}
-            T = vst.T_table(model, xmax)
-        fwd = vst.forward_table(T, step, white)
-        lo = vst.lo_from_forward(fwd)
-        n, rec = vst.tables_from_lo(lo, xmax)
-        q = fwd[x]
-        deltas = vst.encode_lo(lo)
-        assert deltas.max(initial=0) < 65536
-        plane_hdr.append({"xmax": xmax, "lo": deltas.astype("<u2").tobytes(), "model": model})
-        pinfo.update(T=T, fwd=fwd, q=q, nq=len(lo))
-        info["planes"].append(pinfo)
+    groups = layers.PACKINGS[packing]
+    grid = layers.tile_grid(pshape, tile)
+    with ThreadPoolExecutor(threads or default_threads()) as ex:
+        st = list(ex.map(lambda p: _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics),
+                         range(4)))
 
-        grid = layers.tile_grid(pshape, tile)
-        if use_l1 and l1_mode == "mean":
-            l1 = layers.l1_from_q(q, k)
-        elif use_l1:
-            l1 = np.zeros((-(-pshape[0] // k), -(-pshape[1] // k)), np.int64)
-            coeffs = {}
-            for ty, tx, y0, x0, th, tw in grid:
-                c, (lh, lw) = layers.dwt53(q[y0:y0 + th, x0:x0 + tw], levels)
-                l1[y0 // k:y0 // k + lh, x0 // k:x0 // k + lw] = c[:lh, :lw]
-                c[:lh, :lw] = 0
-                coeffs[ty, tx] = c
+        def tile_job(t):
+            ty, tx, y0, x0, th, tw = t
+            out, payload = [], []
+            for s in st:
+                qt = s["q"][y0:y0 + th, x0:x0 + tw]
+                if not use_l1:
+                    payload.append(qt)
+                elif l1_mode == "mean":
+                    payload.append(qt - layers.upsample(s["l1"], k, np.arange(y0, y0 + th),
+                                                        np.arange(x0, x0 + tw), upsampler))
+                else:
+                    payload.append(s["coeffs"][ty, tx])
+            for p, s in enumerate(st):
+                if with_l3:
+                    qt = s["q"][y0:y0 + th, x0:x0 + tw]
+                    kappa = s["x"][y0:y0 + th, x0:x0 + tw].astype(np.int64) - s["lo"][qt]
+                    out.append((("L3", p, ty, tx), entropy.kappa_encode(kappa, s["n"][qt])))
+            for g, members in enumerate(groups):
+                img = payload[members[0]] if len(members) == 1 else np.stack([payload[p] for p in members], -1)
+                out.append((("L2", g, ty, tx), entropy.jxl_encode(img, effort)))
+            return out
+
+        sections = [sec for secs in ex.map(tile_job, grid) for sec in secs]
         if use_l1:
-            sections.append((("L1", p, 0, 0), entropy.jxl_encode(l1, effort)))
-        for ty, tx, y0, x0, th, tw in grid:
-            qt = q[y0:y0 + th, x0:x0 + tw]
-            if not use_l1:
-                payload = qt
-            elif l1_mode == "mean":
-                up = layers.upsample(l1, k, np.arange(y0, y0 + th), np.arange(x0, x0 + tw), upsampler)
-                payload = qt - up
-            else:
-                payload = coeffs[ty, tx]
-            payloads[p][ty, tx] = payload
-            if with_l3:
-                kappa = x[y0:y0 + th, x0:x0 + tw].astype(np.int64) - lo[qt]
-                sections.append((("L3", p, ty, tx), entropy.kappa_encode(kappa, n[qt])))
-
-    for g, members in enumerate(groups):
-        for ty, tx in payloads[0]:
-            img = [payloads[p][ty, tx] for p in members]
-            img = img[0] if len(img) == 1 else np.stack(img, -1)
-            sections.append((("L2", g, ty, tx), entropy.jxl_encode(img, effort)))
+            sections += list(ex.map(lambda p: (("L1", p, 0, 0), entropy.jxl_encode(st[p]["l1"], effort)), range(4)))
 
     h, w = raw.sensor_shape
     header = {
         "sensor": {"width": w, "height": h, "cfa": [list(o) for o in raw.offsets],
                    "black": list(raw.black), "white": raw.white, "wb": raw.wb,
-                   "color_matrix": raw.color_matrix, "bit_depth": raw.bit_depth},
-        "source": {**(source or {}), "sha256": mosaic_sha256(planes, raw.offsets)},
-        "noise": {"step": step, "planes": [ph["model"] for ph in plane_hdr]},
-        "tables": [{"xmax": ph["xmax"], "lo": ph["lo"]} for ph in plane_hdr],
+                   "color_matrix": raw.color_matrix, "bit_depth": raw.bit_depth,
+                   "cam_xyz": raw.cam_xyz, "flip": raw.flip, "crop": raw.crop},
+        "source": {**(source or {}), "exif": raw.exif, "sha256": mosaic_sha256(planes, raw.offsets)},
+        "noise": {"step": step, "planes": [s["hdr"]["model"] for s in st]},
+        "tables": [{"xmax": s["hdr"]["xmax"], "lo": s["hdr"]["lo"]} for s in st],
         "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": packing,
                    "plane_shape": list(pshape), "l1": use_l1,
-                   "l1_mode": l1_mode, "rec": rec_mode},
+                   "l1_mode": l1_mode, "rec": rec},
         "embed": None,
     }
-    return container.write(header, sections), info
+    return container.write(header, sections), {"planes": [s["info"] for s in st]}
 
 
 class Decoder:
-    def __init__(self, reader):
+    def __init__(self, reader, threads=None):
         self.r = reader
+        self.threads = threads or default_threads()
         hd = reader.header
         self.layout = hd["layout"]
         self.pshape = tuple(self.layout["plane_shape"])
@@ -144,60 +163,70 @@ class Decoder:
             n, rec = vst.tables_from_lo(lo, t["xmax"])
             self.tables.append((lo, n, rec))
         self._l1 = {}
-        groups = layers.PACKINGS[self.layout.get("packing", "P1")]
-        self._where = {p: (g, i) for g, m in enumerate(groups) for i, p in enumerate(m)}
-        self._l2_cache = (None, None)
-
-    def l2_payload(self, p, ty, tx):
-        g, i = self._where[p]
-        if self._l2_cache[0] != (g, ty, tx):
-            self._l2_cache = ((g, ty, tx), entropy.jxl_decode(self.r.section("L2", g, ty, tx)))
-        arr = self._l2_cache[1]
-        return arr if arr.ndim == 2 else arr[..., i]
+        self.groups = layers.PACKINGS[self.layout.get("packing", "P1")]
 
     def l1(self, p):
         if p not in self._l1:
             self._l1[p] = entropy.jxl_decode(self.r.section("L1", p))
         return self._l1[p]
 
-    def q_tile(self, p, t):
+    def q_tiles(self, t):
+        """q for all four planes of one tile."""
         ty, tx, y0, x0, th, tw = t
-        d = self.l2_payload(p, ty, tx)
-        if self.layout["l1"] and self.layout.get("l1_mode") == "wavelet":
-            k = self.layout["k"]
-            levels = k.bit_length() - 1
+        d = [None] * 4
+        for g, members in enumerate(self.groups):
+            arr = entropy.jxl_decode(self.r.section("L2", g, ty, tx))
+            for i, p in enumerate(members):
+                d[p] = arr if arr.ndim == 2 else arr[..., i]
+        if not self.layout["l1"]:
+            return d
+        k = self.layout["k"]
+        if self.layout.get("l1_mode") == "wavelet":
             lh, lw = -(-th // k), -(-tw // k)
-            d[:lh, :lw] = self.l1(p)[y0 // k:y0 // k + lh, x0 // k:x0 // k + lw]
-            return layers.idwt53(d, levels)
-        if self.layout["l1"]:
-            d = d + layers.upsample(self.l1(p), self.layout["k"], np.arange(y0, y0 + th),
-                                    np.arange(x0, x0 + tw), self.layout["upsampler"])
-        return d
+            out = []
+            for p in range(4):
+                c = d[p].copy()
+                c[:lh, :lw] = self.l1(p)[y0 // k:y0 // k + lh, x0 // k:x0 // k + lw]
+                out.append(layers.idwt53(c, k.bit_length() - 1))
+            return out
+        rows, cols = np.arange(y0, y0 + th), np.arange(x0, x0 + tw)
+        return [d[p] + layers.upsample(self.l1(p), k, rows, cols, self.layout["upsampler"]) for p in range(4)]
+
+    def q_tile(self, p, t):
+        return self.q_tiles(t)[p]
 
     def planes(self, mode, prect=None, dither=False, seed=0, rec=None):
         """Decode plane rectangle [y0,y1) x [x0,x1) of all four planes."""
         rec_mode = rec or self.layout.get("rec", "floor")
         y0, x0, y1, x1 = prect or (0, 0, *self.pshape)
         out = np.empty((4, y1 - y0, x1 - x0), np.uint16)
-        rng = np.random.default_rng(seed)
-        for t in layers.tiles_touching(self.pshape, self.layout["tile"], y0, x0, y1, x1):
-            ty, tx, ty0, tx0, th, tw = t
+        if self.layout["l1"]:
             for p in range(4):
-                lo, n, rec = self.tables[p]
-                q = self.q_tile(p, t)
+                self.l1(p)
+
+        def tile_job(t):
+            ty, tx, ty0, tx0, th, tw = t
+            rng = np.random.default_rng([seed, ty, tx])
+            qs = self.q_tiles(t)
+            sy0, sx0 = max(y0, ty0), max(x0, tx0)
+            sy1, sx1 = min(y1, ty0 + th), min(x1, tx0 + tw)
+            for p in range(4):
+                lo, n, rec_t = self.tables[p]
+                q = qs[p]
                 if mode == "exact":
                     x = lo[q] + entropy.kappa_decode(self.r.section("L3", p, ty, tx), n[q])
                 elif dither:
                     x = lo[q] + rng.integers(0, n[q])
                 elif rec_mode == "checker":
                     parity = (np.arange(ty0, ty0 + th)[:, None] + np.arange(tx0, tx0 + tw)[None, :]) & 1
-                    x = rec[q] + ((n[q] - 1) & 1) * parity
+                    x = rec_t[q] + ((n[q] - 1) & 1) * parity
                 else:
-                    x = rec[q]
-                sy0, sx0 = max(y0, ty0), max(x0, tx0)
-                sy1, sx1 = min(y1, ty0 + th), min(x1, tx0 + tw)
-                out[p, sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
-                    x[sy0 - ty0:sy1 - ty0, sx0 - tx0:sx1 - tx0]
+                    x = rec_t[q]
+                out[p, sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = x[sy0 - ty0:sy1 - ty0, sx0 - tx0:sx1 - tx0]
+
+        tiles = layers.tiles_touching(self.pshape, self.layout["tile"], y0, x0, y1, x1)
+        with ThreadPoolExecutor(self.threads) as ex:
+            list(ex.map(tile_job, tiles))
         return out
 
     def mosaic(self, mode, region=None, dither=False, seed=0):
@@ -209,6 +238,17 @@ class Decoder:
         py1, px1 = -(-(y + h) // 2), -(-(x + w) // 2)
         m = io_raw.unpack(self.planes(mode, (py0, px0, py1, px1), dither, seed), self.offsets)
         return m[y - 2 * py0:y - 2 * py0 + h, x - 2 * px0:x - 2 * px0 + w]
+
+    def preview_mosaic(self):
+        """Low-resolution mosaic from L0 + L1 only, plus a header adjusted to its size,
+        for developing a proper-colour thumbnail (export.develop)."""
+        planes = np.stack([self.tables[p][2][np.clip(self.l1(p), 0, len(self.tables[p][2]) - 1)]
+                           for p in range(4)]).astype(np.uint16)
+        hd = {**self.r.header, "sensor": dict(self.r.header["sensor"])}
+        k = self.layout["k"]
+        if hd["sensor"].get("crop"):
+            hd["sensor"]["crop"] = [-(-v // k) if i < 2 else v // k for i, v in enumerate(hd["sensor"]["crop"])]
+        return io_raw.unpack(planes, self.offsets), hd
 
     def preview(self):
         """8-bit RGB thumbnail from L0 + L1 only (float allowed: not an exact path)."""
@@ -228,9 +268,9 @@ class Decoder:
         return (srgb * 255 + 0.5).astype(np.uint8)
 
 
-def decode(src, mode="signal", region=None, dither=False, seed=0, sidecar=None):
+def decode(src, mode="signal", region=None, dither=False, seed=0, sidecar=None, threads=None):
     r = container.RangeReader(src, sidecar)
-    dec = Decoder(r)
+    dec = Decoder(r, threads)
     if mode == "index":
         return r.header
     if mode == "preview":
