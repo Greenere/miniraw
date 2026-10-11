@@ -123,7 +123,7 @@ def read(path):
                 cm = m.tolist()
         except Exception:
             pass
-        meta = {"color_desc": desc, "raw_type": str(r.raw_type)}
+        meta = {"color_desc": desc, "raw_type": str(r.raw_type), "path": str(path)}
         cam_xyz = np.array(r.rgb_xyz_matrix)[:3, :3]
         cam_xyz = cam_xyz.tolist() if np.abs(cam_xyz).sum() > 0 else None
         sz = r.sizes

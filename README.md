@@ -78,9 +78,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ## CLI
 
 ```sh
-miniraw encode IN.ARW OUT.mraw [--step 1.0] [--effort 4] [--no-l3] [--threads N]
+miniraw encode IN.ARW OUT.mraw [--step 1.0] [--effort 4] [--no-l3] [--no-original] [--threads N]
 
 # decode: the output type follows the extension
+miniraw decode IN.mraw OUT.ARW                 # the original raw file, byte for byte (SHA-256 verified)
 miniraw decode IN.mraw OUT.dng                 # raw again: bit-exact sensor data (verified), lossless-JPEG DNG
 miniraw decode IN.mraw OUT.jpg                 # developed with LibRaw, camera WB, EXIF kept
 miniraw decode IN.mraw OUT.png --bits 16       # also .tif; --exposure EV, --half-size, --no-auto-bright
@@ -95,37 +96,45 @@ miniraw split IN.mraw        # move L3 to IN.mraw.l3 (decode with --sidecar IN.m
 Default decode modes: `exact` for `.dng` and `.npy` when L3 is present (`signal` with a note if the file is
 stripped), `signal` for images (visually identical, about twice as fast). The DNG carries the colour matrix,
 white balance, black and white levels, default crop, orientation and capture EXIF recorded at encode time.
-It reproduces the sensor data exactly, not the original file's bytes: proprietary containers (ARW, NEF, CR3)
-also hold maker notes, previews and camera-specific compression, which are not stored.
+It reproduces the sensor data exactly, in a standard format.
+
+**Restoring the original file.** `encode` also keeps everything else in the original raw file, as long as its
+sensor data is stored as lossless-JPEG tiles (Sony ARW lossless, lossless DNG). That means the TIFF structure,
+maker notes and embedded previews (repacked losslessly). Decoding to the original extension (`OUT.ARW`, matched
+case-insensitively) re-encodes the tiles with the file's own Huffman tables and returns the identical file,
+checked against its SHA-256.
+
+This is verified when encoding. If a file can't be reproduced exactly, `encode` says why, and decoding to `.dng`
+still works. The extra data sits in the cold tier: about 3 MB per 33 MP ARW, mostly the camera's embedded
+full-size JPEG preview. `--no-original` skips it. Raw formats that compress the sensor data differently (NEF,
+CR2, CR3, compressed ARW, ...) restore as DNG.
 
 ## Bundle a whole folder
 
 ```sh
 miniraw bundle ~/Photos/2026-09-Alaska trip.zip                 # everything restorable exactly
 miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold split    # trip.zip (hot) + trip.l3.zip (cold)
-miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold drop     # near-lossless raws only, smallest
+miniraw bundle ~/Photos/2026-09-Alaska trip.zip --cold drop     # near-lossless raws only, smallest (= --no-l3)
 miniraw unbundle trip.zip restored/                              # raws come back as DNG
 miniraw unbundle trip.zip previews/ --raw-as jpg                 # or as developed JPEGs
 miniraw unbundle trip.zip --list
 ```
 
-`bundle` walks the folder, keeps its structure, and writes one zip:
+`bundle` accepts the same encoding flags as `encode` (`--step`, `--effort`, `--no-l3`, `--threads`). It walks the
+folder, keeps its structure, and writes one zip:
 
 | In the folder | In the bundle | Restored as |
 |---|---|---|
-| Raw files (2x2 Bayer: ARW, NEF, CR2/CR3, DNG, ...) | `.mraw` | DNG with bit-exact sensor data (or `--raw-as jpg/png/tif/mraw`) |
+| Raw files (2x2 Bayer: ARW, NEF, CR2/CR3, DNG, ...) | `.mraw` | the identical file where supported (Sony ARW lossless, lossless DNG); otherwise DNG with bit-exact sensor data. `--raw-as dng/jpg/png/tif/mraw` for other forms |
 | JPEG | lossless JPEG XL repack, about 21% smaller | the identical JPEG, byte for byte |
 | PNG | stored; or lossless JPEG XL with `--png repack`, about 42% smaller | identical bytes; or identical pixels (only PNGs without colour or text metadata are repacked) |
 | Anything else (sidecars, video, X-Trans raws, ...) | stored as-is | the identical file |
 
 A `manifest.json` in the zip records every file's path, size, SHA-256 and modification time. `unbundle` checks each
 restored file against it and restores the modification times. On 10 Sony A7 IV RAW+JPEG pairs, the 456 MB folder
-became a 322 MB bundle that restores exactly. With `--cold split` it became a 153 MB hot zip plus a 169 MB cold
-zip; the cold zip is only needed for bit-exact raws.
-
-Raw files are restored as DNG, not as the original ARW/NEF/CR3 bytes. Those formats wrap the sensor data in maker
-notes, embedded previews and camera-specific compression that the bundle doesn't keep, so a restored folder of
-DNGs can be larger than the original raws.
+became a 355 MB bundle (-22%), and unbundling gave back an identical folder: `diff -r` is clean, including all 10
+ARWs byte for byte. With `--cold split`, the main zip holds the near-lossless raws and the JPEGs (153 MB). The
+`.l3.zip` holds everything needed to restore the exact originals.
 
 **Why JPEG and PNG don't get MiniRaw's treatment.** MiniRaw saves space by not storing the random sensor noise in
 linear raw data. By the time a photo is a JPEG or PNG, it has been demosaiced, denoised, tone-curved and rounded

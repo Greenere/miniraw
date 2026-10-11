@@ -53,11 +53,15 @@ def test_roundtrip(folder, tmp_path, cold):
     for rel in ["broken.ARW", "day2/IMG_0001.xmp", "day2/graphic.png", "day2/photo.jpg"]:
         assert _hash(restored / rel) == _hash(src / rel), rel
     assert os.path.getmtime(restored / "day2" / "photo.jpg") == 1_600_000_000
-    # IMG_0001.dng is restored under the same name; its sensor data is exact unless L3 was dropped
-    with rawpy.imread(str(restored / "IMG_0001.dng")) as r:
-        got = r.raw_image_visible[:mosaic.shape[0], :mosaic.shape[1]]
-        assert np.array_equal(got, mosaic) == (cold != "drop")
-    assert stats["raw_exact"] == (0 if cold == "drop" else 1)
+    # IMG_0001.dng comes back byte for byte unless L3 was dropped; then it is a near-lossless DNG
+    if cold != "drop":
+        assert _hash(restored / "IMG_0001.dng") == _hash(src / "IMG_0001.dng")
+        assert stats["raw_original"] == 1
+    else:
+        with rawpy.imread(str(restored / "IMG_0001.dng")) as r:
+            got = r.raw_image_visible[:mosaic.shape[0], :mosaic.shape[1]]
+            assert not np.array_equal(got, mosaic)
+        assert stats["raw_signal"] == 1
 
 
 def test_split_without_l3_falls_back_to_signal(folder, tmp_path):
@@ -66,8 +70,11 @@ def test_split_without_l3_falls_back_to_signal(folder, tmp_path):
     bundle.bundle(src, out, effort=3, cold="split", log=lambda *a: None)
     (tmp_path / "b.l3.zip").rename(tmp_path / "elsewhere.zip")
     stats = bundle.unbundle(out, tmp_path / "r1", log=lambda *a: None)
-    assert stats["raw_signal"] == 1
+    assert stats["raw_signal"] == 1 and stats["raw_original"] == 0
     stats = bundle.unbundle(out, tmp_path / "r2", l3=tmp_path / "elsewhere.zip", log=lambda *a: None)
+    assert stats["raw_original"] == 1
+    assert _hash(tmp_path / "r2" / "IMG_0001.dng") == _hash(src / "IMG_0001.dng")
+    stats = bundle.unbundle(out, tmp_path / "r3", raw_as="dng", l3=tmp_path / "elsewhere.zip", log=lambda *a: None)
     assert stats["raw_exact"] == 1
 
 
@@ -98,6 +105,22 @@ def test_png_repack_is_pixel_identical_and_skips_metadata_pngs(folder, tmp_path)
     bundle.unbundle(out, tmp_path / "r", log=lambda *a: None)
     assert np.array_equal(imagecodecs.png_decode((tmp_path / "r" / "day2" / "graphic.png").read_bytes()), rgb)
     assert _hash(tmp_path / "r" / "day2" / "tagged.png") == _hash(src / "day2" / "tagged.png")
+
+
+def test_cli_bundle_encode_flags_take_effect(folder, tmp_path):
+    src, _ = folder
+    cli.main(["bundle", str(src), str(tmp_path / "a.zip"), "--effort", "3", "--threads", "1"])
+    cli.main(["bundle", str(src), str(tmp_path / "b.zip"), "--effort", "3", "--step", "2", "--no-l3"])
+    with zipfile.ZipFile(tmp_path / "a.zip") as za, zipfile.ZipFile(tmp_path / "b.zip") as zb:
+        ma, mb = bundle.read_manifest(za), bundle.read_manifest(zb)
+        assert ma["settings"]["cold"] == "keep" and mb["settings"]["cold"] == "drop"
+        assert mb["settings"]["step"] == 2.0
+        ra = container.RangeReader(za.read("IMG_0001.dng.mraw"))
+        rb = container.RangeReader(zb.read("IMG_0001.dng.mraw"))
+    assert ra.has_l3 and not rb.has_l3
+    assert ra.header["noise"]["step"] == 1.0 and rb.header["noise"]["step"] == 2.0
+    with pytest.raises(SystemExit):
+        cli.main(["bundle", str(src), str(tmp_path / "c.zip"), "--no-l3", "--cold", "split"])
 
 
 def test_rejects_path_traversal(tmp_path):

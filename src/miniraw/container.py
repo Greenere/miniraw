@@ -1,7 +1,8 @@
 """.mraw container: 16-byte preamble, zstd-MessagePack header, sections (spec 5).
 
-Section order on disk is L1, L2, L3 so truncating at the first L3 byte drops the
-cold layer. All offsets are absolute.
+Section order on disk is L1, L2, L3, SRC so truncating at the first L3 byte drops
+the cold layers (L3, and SRC: what is needed to restore the original raw file).
+All offsets are absolute.
 """
 import struct
 import zlib
@@ -15,7 +16,8 @@ VERSION = 1
 FLAG_L3 = 1
 PREAMBLE = struct.Struct("<4sHHII")
 FIRST_READ = 16 * 1024
-LAYER_ORDER = {"L1": 1, "L2": 2, "L3": 3}
+LAYER_ORDER = {"L1": 1, "L2": 2, "L3": 3, "SRC": 4}
+COLD = ("L3", "SRC")
 
 
 def write(header, sections):
@@ -66,7 +68,7 @@ class RangeReader:
         self.header = msgpack.unpackb(zstandard.ZstdDecompressor().decompress(hb), raw=False,
                                       strict_map_key=False)
         self.sections = {tuple(s[:4]): s[4:] for s in self.header["sections"]}
-        self.l3_start = min((s[4] for s in self.header["sections"] if s[0] == "L3"), default=None)
+        self.l3_start = min((s[4] for s in self.header["sections"] if s[0] in COLD), default=None)
 
     @property
     def has_l3(self):
@@ -74,7 +76,7 @@ class RangeReader:
 
     def section(self, layer, plane, ty=0, tx=0):
         off, length, crc = self.sections[(layer, plane, ty, tx)]
-        if layer == "L3" and not (self.flags & FLAG_L3):
+        if layer in COLD and not (self.flags & FLAG_L3):
             if self.sidecar is None:
                 raise ValueError("L3 not present (stripped); supply the .mraw.l3 sidecar")
             self.log.append(("sidecar", off - self.l3_start, length))
@@ -85,12 +87,16 @@ class RangeReader:
             raise ValueError(f"CRC mismatch in section {layer} {plane} {ty} {tx}")
         return data
 
+    @property
+    def has_original(self):
+        return ("SRC", 0, 0, 0) in self.sections and self.has_l3
+
     def bytes_read(self):
         return sum(e[-1] for e in self.log)
 
 
 def layer_sizes(header):
-    out = {"L1": 0, "L2": 0, "L3": 0}
+    out = {"L1": 0, "L2": 0, "L3": 0, "SRC": 0}
     for layer, _, _, _, _, length, _ in header["sections"]:
         out[layer] += length
     return out

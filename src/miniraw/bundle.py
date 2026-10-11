@@ -7,9 +7,9 @@ text metadata are stored as lossless JPEG XL and restored with identical pixels
 manifest.json inside the zip records each file's original path, size, SHA-256
 and modification time, so unbundling can verify and restore every file.
 
-Raw files come back as DNG with bit-exact sensor data, not as the original
-proprietary file bytes (ARW, NEF, CR3 ... embed maker notes, previews and
-camera-specific compression that are not stored).
+Raw files come back byte for byte when MiniRaw could keep their container
+(lossless-JPEG-tiled raws such as Sony ARW lossless; see source.py), and
+otherwise as DNG with bit-exact sensor data.
 """
 import hashlib
 import json
@@ -118,18 +118,20 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
                 try:
                     raw = io_raw.read(p)
                     mr, _ = codec.encode(raw, step=step, effort=effort, threads=threads,
-                                         with_l3=cold != "drop", source={"file": p.name})
+                                         with_l3=cold != "drop", source={"file": p.name},
+                                         keep_original=cold != "drop")
                     hdr = container.RangeReader(mr).header
+                    restorable = bool((hdr["source"].get("original") or {}).get("restorable"))
                     e.update(kind="raw", member=f"{rel}.mraw", mosaic_sha256=hdr["source"]["sha256"],
-                             step=step, exact=cold != "drop")
+                             step=step, exact=cold != "drop", original_restorable=restorable)
                     if cold == "split":
                         mr, l3 = container.strip(mr)
                         zl3.writestr(_zipinfo(f"{rel}.mraw.l3", st.st_mtime, ".mraw"), l3)
                         e["l3_member"] = f"{rel}.mraw.l3"
                         total_l3 += len(l3)
                     payload = mr
-                    note = "raw, bit-exact" if cold == "keep" else ("raw, L3 split off" if cold == "split"
-                                                                     else "raw, near-lossless")
+                    note = ("raw, original restorable byte for byte" if restorable else "raw, bit-exact sensor data") \
+                        if cold == "keep" else ("raw, L3 split off" if cold == "split" else "raw, near-lossless")
                 except io_raw.NotBayer as err:
                     note = f"raw stored as-is (not 2x2 Bayer: {err})"
                 except Exception as err:  # unreadable or unsupported raw: keep the original
@@ -196,8 +198,11 @@ def _safe_target(root, rel):
     return target
 
 
-def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop):
-    """Extract bundle `src` into folder `dst`. raw_as: dng | jpg | png | tif | mraw.
+def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **develop):
+    """Extract bundle `src` into folder `dst`. raw_as: original | dng | jpg | png | tif | mraw.
+
+    "original" restores raw files byte for byte where the bundle kept their container, and
+    falls back to DNG (bit-exact sensor data, or near-lossless without L3) otherwise.
 
     l3: the split-off <bundle>.l3.zip (looked up next to the bundle when not given).
     """
@@ -206,7 +211,7 @@ def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop
     if l3 is None:
         cand = src.with_name(src.name[:-4] + ".l3.zip" if src.name.endswith(".zip") else src.name + ".l3.zip")
         l3 = cand if cand.exists() else None
-    stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0}
+    stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0, "raw_original": 0, "raw_fallback": 0}
     with zipfile.ZipFile(src) as zf, (zipfile.ZipFile(l3) if l3 else _Null()) as zl3:
         m = read_manifest(zf)
         files = m["files"]
@@ -219,23 +224,33 @@ def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop
                 sidecar = None
                 if e.get("l3_member") and zl3 is not None:
                     sidecar = zl3.read(e["l3_member"])
-                if raw_as == "mraw":
+                reader = container.RangeReader(payload, sidecar)
+                if raw_as == "original" and reader.has_original:
+                    blob = codec.Decoder(reader, threads).original()
+                    if _sha256(blob) != e["sha256"]:
+                        raise ValueError(f"{rel}: restored file does not match the original's SHA-256")
+                    out.write_bytes(blob)
+                    stats["verified"] += 1
+                    stats["raw_original"] += 1
+                    note = "original, byte-identical"
+                elif raw_as == "mraw":
                     out = out.with_name(out.name + ".mraw")
                     out.write_bytes(payload)
                     if sidecar:
                         out.with_name(out.name + ".l3").write_bytes(sidecar)
                     note = "mraw"
                 else:
-                    reader = container.RangeReader(payload, sidecar)
+                    fmt = "dng" if raw_as == "original" else raw_as
+                    stats["raw_fallback"] += raw_as == "original"
                     dec = codec.Decoder(reader, threads)
                     exact = reader.has_l3
-                    mode = "exact" if exact and raw_as == "dng" else "signal"
+                    mode = "exact" if exact and fmt == "dng" else "signal"
                     mosaic = dec.mosaic(mode)
-                    out = out.with_suffix("." + raw_as)
-                    sibling = str(rel.with_suffix("." + raw_as))
+                    out = out.with_suffix("." + fmt)
+                    sibling = str(rel.with_suffix("." + fmt))
                     if out.exists() or any(f is not e and f["path"] == sibling for f in files):
-                        out = out.with_name(rel.name + "." + raw_as)   # avoid clobbering a sibling
-                    if raw_as == "dng":
+                        out = out.with_name(rel.name + "." + fmt)   # avoid clobbering a sibling
+                    if fmt == "dng":
                         if mode == "exact":
                             ok = _sha256(mosaic.astype("<u2").tobytes()) == e["mosaic_sha256"]
                             if not ok:
@@ -247,7 +262,9 @@ def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop
                         export.save_image(out, rgb, reader.header)
                     stats["raw_exact" if mode == "exact" else "raw_signal"] += 1
                     note = ("DNG, bit-exact sensor data" if mode == "exact" else
-                            "DNG, near-lossless (no L3)" if raw_as == "dng" else f"developed {raw_as.upper()}")
+                            "DNG, near-lossless (no L3)" if fmt == "dng" else f"developed {fmt.upper()}")
+                    if raw_as == "original":
+                        note += " (original not restorable: " + dec.original_unavailable_reason() + ")"
             elif e["kind"] == "png-jxl":
                 import imagecodecs
                 px = imagecodecs.jpegxl_decode(payload)
@@ -270,7 +287,9 @@ def unbundle(src, dst, raw_as="dng", l3=None, threads=None, log=print, **develop
             log(f"[{i}/{len(files)}] {out.relative_to(dst)}  ({note})")
     log(f"\n{stats['files']} files restored to {dst} in {time.perf_counter() - t0:.1f} s; "
         f"{stats['verified']} verified against the original hashes")
-    if stats["raw_signal"] and raw_as == "dng":
+    if stats["raw_original"]:
+        log(f"{stats['raw_original']} raw file(s) restored byte for byte")
+    if stats["raw_signal"] and raw_as in ("dng", "original"):
         log(f"note: {stats['raw_signal']} raw file(s) restored near-lossless because their L3 layer is missing "
             f"(bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")
     return stats

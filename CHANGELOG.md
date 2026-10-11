@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Restore the original raw file byte for byte.**
+  - `miniraw decode IN.mraw OUT.ARW` (the source's own extension, matched case-insensitively) returns the identical file, checked against its SHA-256.
+  - Supported where the sensor data is lossless-JPEG tiles: Sony ARW lossless and lossless DNG, any of predictors 1-7.
+  - The TIFF structure, maker notes and embedded previews (repacked losslessly) are kept in a new cold `SRC` section. It is stripped and split together with L3.
+  - `encode` verifies exact reproduction up front and records why when a file isn't supported. `--no-original` opts out.
+  - `unbundle` now restores originals by default (`--raw-as original`) and falls back to DNG.
+
 - **`miniraw bundle DIR OUT.zip` / `miniraw unbundle IN.zip DIR`.**
   - Raws are encoded to `.mraw`, JPEGs repacked losslessly with JPEG XL (byte-exact), and PNGs optionally repacked (pixel-exact); everything else is stored.
   - `--cold keep|split|drop` controls the bit-exact layer.

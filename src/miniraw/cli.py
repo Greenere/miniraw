@@ -6,7 +6,8 @@
     miniraw info IN.mraw
     miniraw strip IN.mraw
     miniraw split IN.mraw
-    miniraw bundle DIR OUT.zip [--cold keep|split|drop] [--step 1.0] [--effort 4] [--jpeg repack|store]
+    miniraw bundle DIR OUT.zip [--cold keep|split|drop | --no-l3] [--step 1.0] [--effort 4] [--threads N]
+                   [--jpeg repack|store]
                    [--png store|repack]
     miniraw unbundle IN.zip OUTDIR [--raw-as dng|jpg|png|tif|mraw] [--l3 IN.l3.zip] | --list
 """
@@ -31,9 +32,13 @@ def main(argv=None):
     e.add_argument("--no-l3", action="store_true")
     e.add_argument("--effort", type=int, default=4, help="JPEG XL effort 1-9 (default 4; 7 is ~2x slower, ~1.7%% smaller hot tier)")
     e.add_argument("--threads", type=int, help="worker threads (default: up to 8 cores)")
+    e.add_argument("--no-original", action="store_true",
+                   help="do not keep what is needed to restore the original raw file byte for byte "
+                        "(saves ~3 MB of cold data per 33 MP ARW)")
     d = sub.add_parser("decode", help="decode to DNG (raw), JPEG/PNG/TIFF (developed), .npy (mosaic) or .json (header)")
     d.add_argument("src")
-    d.add_argument("dst", help="output; the type follows the extension")
+    d.add_argument("dst", help="output; the type follows the extension. Using the source file's own "
+                               "extension (e.g. .ARW) restores the original raw file byte for byte")
     d.add_argument("--mode", choices=["index", "preview", "signal", "exact"],
                    help="layers to decode (default: exact for .dng/.npy when L3 is present, signal for images)")
     d.add_argument("--region", help="x,y,w,h in sensor pixels (.npy, .dng and images)")
@@ -51,9 +56,10 @@ def main(argv=None):
     b = sub.add_parser("bundle", help="compress a folder into one zip: raws -> .mraw, JPEGs repacked losslessly")
     b.add_argument("src", help="folder to bundle (subfolders included)")
     b.add_argument("dst", help="output .zip")
-    b.add_argument("--cold", choices=["keep", "split", "drop"], default="keep",
+    b.add_argument("--cold", choices=["keep", "split", "drop"], default=None,
                    help="bit-exact layer L3: keep in the zip (default), split into OUT.l3.zip, or drop "
                         "(near-lossless raws, ~55%% smaller)")
+    b.add_argument("--no-l3", action="store_true", help="same as --cold drop (matches `encode --no-l3`)")
     b.add_argument("--step", type=float, default=1.0)
     b.add_argument("--effort", type=int, default=4)
     b.add_argument("--jpeg", choices=["repack", "store"], default="repack",
@@ -66,8 +72,9 @@ def main(argv=None):
     u.add_argument("src", help="bundle .zip")
     u.add_argument("dst", nargs="?", help="output folder")
     u.add_argument("--list", action="store_true", help="list the bundle's contents and exit")
-    u.add_argument("--raw-as", choices=["dng", "jpg", "png", "tif", "mraw"], default="dng",
-                   help="restore raws as DNG (bit-exact sensor data, default), developed images, or .mraw")
+    u.add_argument("--raw-as", choices=["original", "dng", "jpg", "png", "tif", "mraw"], default="original",
+                   help="restore raws as the original files byte for byte (default; falls back to DNG when "
+                        "the original can't be restored), DNG, developed images, or .mraw")
     u.add_argument("--l3", help="the split-off .l3.zip (default: looked up next to the bundle)")
     u.add_argument("--threads", type=int)
     a = ap.parse_args(argv)
@@ -75,14 +82,18 @@ def main(argv=None):
     if a.cmd == "encode":
         raw = io_raw.read(a.src)
         data, _ = codec.encode(raw, step=a.step, with_l3=not a.no_l3, effort=a.effort,
-                               threads=a.threads, source={"file": Path(a.src).name})
+                               threads=a.threads, source={"file": Path(a.src).name},
+                               keep_original=not a.no_original)
         Path(a.dst).write_bytes(data)
         _print_info(data)
     elif a.cmd == "decode":
         _decode(a)
     elif a.cmd == "bundle":
         from . import bundle
-        bundle.bundle(a.src, a.dst, a.step, a.effort, a.cold, a.jpeg, a.threads, png=a.png)
+        if a.no_l3 and a.cold not in (None, "drop"):
+            sys.exit(f"--no-l3 conflicts with --cold {a.cold}")
+        cold = "drop" if a.no_l3 else (a.cold or "keep")
+        bundle.bundle(a.src, a.dst, a.step, a.effort, cold, a.jpeg, a.threads, png=a.png)
     elif a.cmd == "unbundle":
         from . import bundle
         if a.list:
@@ -109,6 +120,21 @@ def _decode(a):
     dec = codec.Decoder(reader, a.threads)
     hd = reader.header
     mode = a.mode
+    orig = hd["source"].get("original") or {}
+    src_ext = (orig.get("ext") or Path(hd["source"].get("file", "")).suffix).lower()
+    if ext == src_ext or (ext in RAW_EXTENSIONS and ext != ".dng"):
+        if ext != src_ext:
+            shown = orig.get("ext") or src_ext or "unknown"
+            sys.exit(f"cannot convert to {Path(a.dst).suffix}: this file came from a {shown} file. Use "
+                     f"{shown} to restore the original, or .dng for a standard raw file.")
+        if src_ext != ".dng" or reader.has_original:
+            if not reader.has_original:
+                sys.exit("cannot restore the original raw file: " + dec.original_unavailable_reason()
+                         + ". Use .dng for the sensor data in a standard raw file.")
+            Path(a.dst).write_bytes(dec.original())
+            print(f"restored the original {orig['name']} byte for byte (SHA-256 verified): {a.dst} "
+                  f"({orig['size'] / 1e6:.1f} MB) in {time.perf_counter() - t0:.2f} s")
+            return
     if ext == ".json" or mode == "index":
         Path(a.dst).write_text(json.dumps(_jsonable(hd), indent=1))
         return print(f"wrote header to {a.dst}")
@@ -149,18 +175,31 @@ def _decode(a):
           f"{size / 1e6:.1f} MB) in {time.perf_counter() - t0:.2f} s")
 
 
+RAW_EXTENSIONS = {".dng", ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2",
+                  ".pef", ".srw", ".iiq", ".3fr", ".erf", ".kdc", ".mrw", ".x3f"}
+
+
 def _print_info(data):
     r = container.RangeReader(data)
     hd = r.header
     s = hd["sensor"]
     npx = s["width"] * s["height"]
     sizes = container.layer_sizes(hd)
-    present = sum(sizes.values()) - (0 if r.flags & container.FLAG_L3 else sizes["L3"])
+    present = sum(sizes.values()) - (0 if r.flags & container.FLAG_L3 else sizes["L3"] + sizes["SRC"])
     sizes["L0"] = len(data) - present
     print(f"{s['width']}x{s['height']}  bit depth {s['bit_depth']}  step {hd['noise']['step']}  "
           f"k {hd['layout']['k']}  tile {hd['layout']['tile']}  L3 {'present' if r.flags & 1 else 'stripped'}")
     for k in ("L0", "L1", "L2", "L3"):
         print(f"  {k}: {sizes[k]:>10} B  {8 * sizes[k] / npx:6.3f} bpp")
+    orig = hd["source"].get("original")
+    if orig:
+        state = ("restorable byte for byte" if orig.get("restorable") and r.has_l3 else
+                 "restorable with the .mraw.l3 sidecar" if orig.get("restorable") else
+                 f"not restorable ({orig.get('reason')})")
+        print(f"  original: {orig['name']} ({orig['size'] / 1e6:.1f} MB), {state}")
+    for k in ("SRC",):
+        if sizes.get(k):
+            print(f"  SRC: {sizes[k]:>9} B  (cold: original file container)")
     for i, m in enumerate(hd["noise"]["planes"]):
         print(f"  plane {io_raw.PLANE_NAMES[i]}: {m['type']}" +
               (f" a={m['a']:.3f} c={m['c']:.2f}" if m["type"] == "affine" else ""))
