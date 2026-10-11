@@ -10,8 +10,12 @@ import numpy as np
 
 from . import container, entropy, io_raw, layers, noise, vst
 
-def mosaic_sha256(planes, offsets):
-    return hashlib.sha256(io_raw.unpack(planes, offsets).astype("<u2").tobytes()).hexdigest()
+def mosaic_sha256(planes, offsets, rows=256):
+    """SHA-256 of the mosaic in raster order (little-endian uint16), hashed in row strips."""
+    h = hashlib.sha256()
+    for r0 in range(0, planes.shape[1], rows):
+        h.update(io_raw.unpack(planes[:, r0:r0 + rows], offsets).astype("<u2", copy=False).tobytes())
+    return h.hexdigest()
 
 
 def fit_noise(plane, b, white, noise_profile=None, plane_index=0, diagnostics=True):
@@ -79,12 +83,16 @@ def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnos
 
 def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
            with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None,
-           packing="P3", l1_min_side=128, threads=None, diagnostics=False, keep_original=False):
+           packing=None, l1_min_side=128, threads=None, diagnostics=False, keep_original=False,
+           l2_pred="cross"):
     """Encode a RawImage. `models` (per-plane noise model dicts) skips estimation.
 
     l1_mode "mean" is construction A (floor-mean L1, L2 codes q - up(L1));
     "wavelet" is construction B (per-tile 5/3 lifting, L1 = LL bands, L2 = detail bands).
-    packing names a plane grouping in layers.PACKINGS for the L2 JPEG XL images.
+    packing names a plane grouping in layers.PACKINGS for the L2 JPEG XL images (default: P1 with
+    cross-plane prediction, P3 otherwise).
+    l2_pred "cross" codes each plane's L2 relative to a prediction from already-decoded planes in the
+    tile plus L1 (layers.cross_predict); "l1" codes q - up(L1) for every plane (the earlier format).
     l1_min_side sets k: the largest power of two keeping L1's shorter side >= it.
     rec selects the signal-mode reconstruction: "floor" is spec 4.3's lo + (n-1)//2;
     "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17).
@@ -99,6 +107,9 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     """
     planes = raw.planes
     pshape = planes.shape[1:]
+    if l2_pred == "cross" and use_l1 and l1_mode != "mean":
+        l2_pred = "l1"                      # cross-plane prediction is defined on construction A
+    packing = packing or ("P1" if l2_pred == "cross" else "P3")
     k = (k or layers.choose_k(pshape, l1_min_side)) if use_l1 else 0
     levels = k.bit_length() - 1 if use_l1 else 0
     if use_l1 and l1_mode == "wavelet" and tile is not None:
@@ -112,15 +123,21 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
         def tile_job(t):
             ty, tx, y0, x0, th, tw = t
             out, payload = [], []
-            for s in st:
-                qt = s["q"][y0:y0 + th, x0:x0 + tw]
-                if not use_l1:
-                    payload.append(qt)
-                elif l1_mode == "mean":
-                    payload.append(qt - layers.upsample(s["l1"], k, np.arange(y0, y0 + th),
-                                                        np.arange(x0, x0 + tw), upsampler))
-                else:
-                    payload.append(s["coeffs"][ty, tx])
+            rows, cols = np.arange(y0, y0 + th), np.arange(x0, x0 + tw)
+            if l2_pred == "cross":
+                qt = [s["q"][y0:y0 + th, x0:x0 + tw].astype(np.int64) for s in st]
+                up = [layers.upsample(s["l1"], k, rows, cols, upsampler) if use_l1 else np.zeros((th, tw), np.int64)
+                      for s in st]
+                payload = [qt[p] - layers.cross_predict(p, qt, up, raw.offsets) for p in range(4)]
+            else:
+                for s in st:
+                    qt = s["q"][y0:y0 + th, x0:x0 + tw]
+                    if not use_l1:
+                        payload.append(qt)
+                    elif l1_mode == "mean":
+                        payload.append(qt - layers.upsample(s["l1"], k, rows, cols, upsampler))
+                    else:
+                        payload.append(s["coeffs"][ty, tx])
             for p, s in enumerate(st):
                 if with_l3:
                     qt = s["q"][y0:y0 + th, x0:x0 + tw]
@@ -139,11 +156,13 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     if keep_original and raw.meta.get("path"):
         from . import source as source_mod
         path = raw.meta["path"]
-        blob = open(path, "rb").read()
+        with open(path, "rb") as fh:
+            blob = fh.read()
         original = {"name": os.path.basename(path), "ext": os.path.splitext(path)[1], "size": len(blob),
                     "sha256": hashlib.sha256(blob).hexdigest()}
         try:
-            ctr, previews = source_mod.capture(path, io_raw.unpack(planes, raw.offsets), threads)
+            ctr, previews = source_mod.capture(path, io_raw.unpack(planes, raw.offsets), threads,
+                                               data=blob, previews=with_l3)
             sections.append((("CTR", 0, 0, 0), ctr))
             if with_l3:
                 sections.append((("SRC", 0, 0, 0), previews))
@@ -163,7 +182,7 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
         "tables": [{"xmax": s["hdr"]["xmax"], "lo": s["hdr"]["lo"]} for s in st],
         "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": packing,
                    "plane_shape": list(pshape), "l1": use_l1,
-                   "l1_mode": l1_mode, "rec": rec},
+                   "l1_mode": l1_mode, "rec": rec, "l2_pred": l2_pred},
         "embed": None,
     }
     return container.write(header, sections), {"planes": [s["info"] for s in st]}
@@ -198,6 +217,15 @@ class Decoder:
             arr = entropy.jxl_decode(self.r.section("L2", g, ty, tx))
             for i, p in enumerate(members):
                 d[p] = arr if arr.ndim == 2 else arr[..., i]
+        if self.layout.get("l2_pred") == "cross":
+            k = self.layout["k"]
+            rows, cols = np.arange(y0, y0 + th), np.arange(x0, x0 + tw)
+            up = [layers.upsample(self.l1(p), k, rows, cols, self.layout["upsampler"]) if self.layout["l1"]
+                  else np.zeros((th, tw), np.int64) for p in range(4)]
+            q = [None] * 4
+            for p in layers.CROSS_ORDER:
+                q[p] = d[p].astype(np.int64) + layers.cross_predict(p, q, up, self.offsets)
+            return q
         if not self.layout["l1"]:
             return d
         k = self.layout["k"]
@@ -215,11 +243,15 @@ class Decoder:
     def q_tile(self, p, t):
         return self.q_tiles(t)[p]
 
-    def planes(self, mode, prect=None, dither=False, seed=0, rec=None):
-        """Decode plane rectangle [y0,y1) x [x0,x1) of all four planes."""
+    def planes(self, mode, prect=None, dither=False, seed=0, rec=None, out=None):
+        """Decode plane rectangle [y0,y1) x [x0,x1) of all four planes.
+
+        out: optional four writable (y1-y0, x1-x0) arrays (e.g. strided views of a mosaic).
+        """
         rec_mode = rec or self.layout.get("rec", "floor")
         y0, x0, y1, x1 = prect or (0, 0, *self.pshape)
-        out = np.empty((4, y1 - y0, x1 - x0), np.uint16)
+        if out is None:
+            out = np.empty((4, y1 - y0, x1 - x0), np.uint16)
         if self.layout["l1"]:
             for p in range(4):
                 self.l1(p)
@@ -242,7 +274,7 @@ class Decoder:
                     x = rec_t[q] + ((n[q] - 1) & 1) * parity
                 else:
                     x = rec_t[q]
-                out[p, sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = x[sy0 - ty0:sy1 - ty0, sx0 - tx0:sx1 - tx0]
+                out[p][sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = x[sy0 - ty0:sy1 - ty0, sx0 - tx0:sx1 - tx0]
 
         tiles = layers.tiles_touching(self.pshape, self.layout["tile"], y0, x0, y1, x1)
         with ThreadPoolExecutor(self.threads) as ex:
@@ -252,7 +284,10 @@ class Decoder:
     def mosaic(self, mode, region=None, dither=False, seed=0):
         """Sensor mosaic; region = (x, y, w, h) in sensor coordinates."""
         if region is None:
-            return io_raw.unpack(self.planes(mode, dither=dither, seed=seed), self.offsets)
+            h, w = self.pshape
+            m = np.empty((h * 2, w * 2), np.uint16)
+            self.planes(mode, dither=dither, seed=seed, out=[m[dy::2, dx::2] for dy, dx in self.offsets])
+            return m
         x, y, w, h = region
         py0, px0 = y // 2, x // 2
         py1, px1 = -(-(y + h) // 2), -(-(x + w) // 2)
@@ -318,9 +353,9 @@ class Decoder:
 
 def decode(src, mode="signal", region=None, dither=False, seed=0, sidecar=None, threads=None):
     r = container.RangeReader(src, sidecar)
-    dec = Decoder(r, threads)
     if mode == "index":
         return r.header
+    dec = Decoder(r, threads)
     if mode == "preview":
         return dec.preview()
     return dec.mosaic(mode, region, dither, seed)

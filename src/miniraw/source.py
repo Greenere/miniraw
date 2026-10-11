@@ -255,15 +255,19 @@ def _unpack(blob):
     return rec
 
 
-def capture(path, visible, threads=None):
+def capture(path, visible, threads=None, data=None, previews=True):
     """(container section, previews section) for restoring `path`; see the note above.
 
     visible: the exact sensor mosaic MiniRaw encodes (LibRaw raw_image_visible, cropped to even
     size), at the top-left of LibRaw's raw_image. Raises Unsupported unless re-encoding the
-    tiles reproduces the original bytes exactly.
+    tiles reproduces the original bytes exactly. data: the file's bytes if already read.
+    previews=False skips repacking the large previews (the cold record is then None); their
+    locations are still recorded, which is all write_near_lossless() needs.
     """
     import imagecodecs
-    data = open(path, "rb").read()
+    if data is None:
+        with open(path, "rb") as fh:
+            data = fh.read()
     offs, cnts, shape, (th, tw), embedded, tile_tags, byteorder = _raw_ifd(path)
     H, W = shape
     ntx = -(-W // tw)
@@ -308,9 +312,10 @@ def capture(path, visible, threads=None):
     for e in embedded:
         overlaps = any(e["off"] < b and e["off"] + e["len"] > a for a, b in tile_ranges)
         if e["len"] > BIG_PREVIEW and not overlaps and e["off_tag"]:
-            blob = data[e["off"]:e["off"] + e["len"]]
-            jxl = _repack_jpeg(blob)
-            cold.append([jxl or blob, jxl is not None])
+            if previews:
+                blob = data[e["off"]:e["off"] + e["len"]]
+                jxl = _repack_jpeg(blob)
+                cold.append([jxl or blob, jxl is not None])
             big.append(e)
     cuts = sorted([(t[0], t[1]) for t in tiles] + [(e["off"], e["len"]) for e in big])
     skel, pos = [], 0
@@ -325,7 +330,7 @@ def capture(path, visible, threads=None):
                  # sensor area outside the visible region: the right strip and the bottom strip
                  "right": entropy.jxl_encode(full[:vh, vw:], 3) if vw < full.shape[1] else b"",
                  "bottom": entropy.jxl_encode(full[vh:, :], 3) if vh < full.shape[0] else b""}
-    return _pack(container), _pack({"format": FORMAT, "previews": cold})
+    return _pack(container), (_pack({"format": FORMAT, "previews": cold}) if previews else None)
 
 
 def _sensor(rec, visible):

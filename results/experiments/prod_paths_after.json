@@ -1,0 +1,99 @@
+{
+ "file": "/Users/haoyangli/projects/miniraw/data/personal_raws/DSC04565.ARW",
+ "mraw_sizes": {
+  "full.mraw": 28239243,
+  "hot.mraw": 11269039
+ },
+ "paths": {
+  "encode core (API, L3, no original)": {
+   "wall_s": 2.0883744160528295,
+   "peak_rss_mb": 1162.657792,
+   "read_bytes": 53063,
+   "read_calls": 58,
+   "read_by_file": {
+    "DSC04565.ARW": 53063
+   }
+  },
+  "encode core (API, no L3)": {
+   "wall_s": 1.9456304589984939,
+   "peak_rss_mb": 1194.377216,
+   "read_bytes": 53063,
+   "read_calls": 58,
+   "read_by_file": {
+    "DSC04565.ARW": 53063
+   }
+  },
+  "CLI encode (keeps original)": {
+   "wall_s": 4.382050957996398,
+   "peak_rss_mb": 2032.533504,
+   "read_bytes": 38234869,
+   "read_calls": 91,
+   "read_by_file": {
+    "DSC04565.ARW": 38234869
+   }
+  },
+  "CLI encode --no-l3 (keeps container)": {
+   "wall_s": 3.439557958045043,
+   "peak_rss_mb": 1439.596544,
+   "read_bytes": 38234869,
+   "read_calls": 91,
+   "read_by_file": {
+    "DSC04565.ARW": 38234869
+   }
+  },
+  "decode signal (full)": {
+   "wall_s": 0.5017275420250371,
+   "peak_rss_mb": 439.0912,
+   "read_bytes": 10922969,
+   "read_calls": 145,
+   "read_by_file": {
+    "full.mraw": 10922969
+   }
+  },
+  "decode exact (full)": {
+   "wall_s": 0.9841216669883579,
+   "peak_rss_mb": 417.759232,
+   "read_bytes": 26793433,
+   "read_calls": 285,
+   "read_by_file": {
+    "full.mraw": 26793433
+   }
+  },
+  "restore original ARW": {
+   "wall_s": 2.371320625010412,
+   "peak_rss_mb": 954.843136,
+   "read_bytes": 28250340,
+   "read_calls": 287,
+   "read_by_file": {
+    "full.mraw": 28250340
+   }
+  },
+  "decode preview (L0+L1)": {
+   "wall_s": 0.016524208011105657,
+   "peak_rss_mb": 84.525056,
+   "read_bytes": 65749,
+   "read_calls": 5,
+   "read_by_file": {
+    "full.mraw": 65749
+   }
+  },
+  "decode 1024x1024 region (signal)": {
+   "wall_s": 0.08924512495286763,
+   "peak_rss_mb": 230.326272,
+   "read_bytes": 1434165,
+   "read_calls": 21,
+   "read_by_file": {
+    "full.mraw": 1434165
+   }
+  },
+  "header only (index)": {
+   "wall_s": 0.0002133329981006682,
+   "peak_rss_mb": 75.677696,
+   "read_bytes": 16384,
+   "read_calls": 1,
+   "read_by_file": {
+    "full.mraw": 16384
+   }
+  }
+ }
+}

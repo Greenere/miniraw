@@ -23,9 +23,12 @@ def l1_from_q(q, k):
     """Floor-mean of q over k x k blocks; partial edge blocks average what they hold."""
     h, w = q.shape
     hb, wb = -(-h // k), -(-w // k)
-    pad = np.zeros((hb * k, wb * k), np.int64)
-    pad[:h, :w] = q
-    s = pad.reshape(hb, k, wb, k).sum(axis=(1, 3))
+    if (h, w) != (hb * k, wb * k):
+        pad = np.zeros((hb * k, wb * k), q.dtype)
+        pad[:h, :w] = q
+    else:
+        pad = q
+    s = pad.reshape(hb, k, wb, k).sum(axis=(1, 3), dtype=np.int64)
     rows = np.minimum(k, h - np.arange(hb) * k)
     cols = np.minimum(k, w - np.arange(wb) * k)
     return s // (rows[:, None] * cols[None, :])
@@ -117,6 +120,45 @@ def idwt53(c, levels):
     return c
 
 
+# --- Cross-plane prediction for L2 (integer only, inside one tile) -------------------------
+# Planes are coded in the order G1, G2, R, B. G1 is predicted by up(L1); G2 by the mean of its four
+# diagonal G1 neighbours plus the low-pass G2-G1 offset from L1; R and B by the surrounding green
+# plus the low-pass colour difference from L1. Neighbours are clamped to the tile, so tiles stay
+# independent. Averaging several noisy neighbours keeps the prediction's own noise low.
+
+CROSS_ORDER = (1, 2, 0, 3)          # G1, G2, R, B in plane indices
+
+
+def _shift(a, dy, dx):
+    h, w = a.shape
+    return a[np.clip(np.arange(h) + dy, 0, h - 1)][:, np.clip(np.arange(w) + dx, 0, w - 1)]
+
+
+def _neighbour_sum(src, src_off, dst_off):
+    """Sum and count of the src-plane samples adjacent to each dst-plane site."""
+    (sy, sx), (dy, dx) = src_off, dst_off
+    acc, n = 0, 0
+    for oy in ((-1, 1) if sy != dy else (0,)):
+        for ox in ((-1, 1) if sx != dx else (0,)):
+            acc = acc + _shift(src, (dy + oy - sy) // 2, (dx + ox - sx) // 2)
+            n += 1
+    return acc, n
+
+
+def cross_predict(p, q, up, offsets):
+    """Integer prediction of plane p for one tile from already-decoded planes q and up(L1)."""
+    G1, G2 = 1, 2
+    if p == G1:
+        return up[G1]
+    if p == G2:
+        s, n = _neighbour_sum(q[G1], offsets[G1], offsets[G2])
+        return (s + n * (up[G2] - up[G1]) + n // 2) // n
+    s1, n1 = _neighbour_sum(q[G1], offsets[G1], offsets[p])
+    s2, n2 = _neighbour_sum(q[G2], offsets[G2], offsets[p])
+    den = 2 * n1 * n2
+    return (s1 * n2 + s2 * n1 + den * up[p] - n1 * n2 * (up[G1] + up[G2]) + den // 2) // den
+
+
 def tile_grid(shape, tile):
     h, w = shape
     if tile is None:
@@ -126,6 +168,15 @@ def tile_grid(shape, tile):
 
 
 def tiles_touching(shape, tile, y0, x0, y1, x1):
-    """Tiles that intersect plane rectangle [y0,y1) x [x0,x1)."""
-    return [t for t in tile_grid(shape, tile)
-            if t[2] < y1 and t[2] + t[4] > y0 and t[3] < x1 and t[3] + t[5] > x0]
+    """Tiles that intersect plane rectangle [y0,y1) x [x0,x1), in row-major order.
+
+    Enumerates only the touched tiles (O(K)), after clipping the rectangle to the plane.
+    """
+    h, w = shape
+    y0, x0, y1, x1 = max(y0, 0), max(x0, 0), min(y1, h), min(x1, w)
+    if y1 <= y0 or x1 <= x0:
+        return []
+    if tile is None:
+        return [(0, 0, 0, 0, h, w)]
+    return [(ty, tx, ty * tile, tx * tile, min(tile, h - ty * tile), min(tile, w - tx * tile))
+            for ty in range(y0 // tile, (y1 - 1) // tile + 1) for tx in range(x0 // tile, (x1 - 1) // tile + 1)]

@@ -6,6 +6,7 @@ the original raw file). CTR, the original file's container, stays hot so a valid
 file in the original format can still be written around near-lossless pixels.
 All offsets are absolute.
 """
+import os
 import struct
 import zlib
 from pathlib import Path
@@ -26,12 +27,13 @@ def write(header, sections):
     """sections: list of ((layer, plane, ty, tx), payload bytes). Returns file bytes."""
     sections = sorted(sections, key=lambda s: (LAYER_ORDER[s[0][0]], s[0][1:]))
     has_l3 = any(s[0][0] == "L3" for s in sections)
+    crcs = [zlib.crc32(data) for _, data in sections]
     reserve = 0
     for _ in range(8):
         off = PREAMBLE.size + reserve
         table = []
-        for (layer, plane, ty, tx), data in sections:
-            table.append([layer, plane, ty, tx, off, len(data), zlib.crc32(data)])
+        for ((layer, plane, ty, tx), data), crc in zip(sections, crcs):
+            table.append([layer, plane, ty, tx, off, len(data), crc])
             off += len(data)
         hb = zstandard.ZstdCompressor(level=19).compress(
             msgpack.packb({**header, "sections": table}, use_bin_type=True))
@@ -44,18 +46,91 @@ def write(header, sections):
     return b"".join([pre, hb, b"\0" * (reserve - len(hb))] + [d for _, d in sections])
 
 
+class _Bytes:
+    """In-memory backing store."""
+
+    def __init__(self, b):
+        self.b = bytes(b)
+        self.size = len(self.b)
+
+    def read_at(self, offset, length):
+        return self.b[offset:offset + length]
+
+    def close(self):
+        pass
+
+
+class _File:
+    """File backing store using positional reads (safe across concurrent tile jobs)."""
+
+    def __init__(self, path):
+        self.path = str(path)
+        self.fd = os.open(self.path, os.O_RDONLY)
+        self.size = os.fstat(self.fd).st_size
+
+    def read_at(self, offset, length):
+        length = max(0, min(length, self.size - offset))
+        parts, got = [], 0
+        while got < length:
+            b = os.pread(self.fd, length - got, offset + got)
+            if not b:
+                break
+            parts.append(b)
+            got += len(b)
+        return b"".join(parts)
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    def __del__(self):
+        self.close()
+
+
+def _source(src):
+    if src is None or isinstance(src, (_Bytes, _File)):
+        return src
+    if isinstance(src, (bytes, bytearray, memoryview)):
+        return _Bytes(src)
+    return _File(src)
+
+
 class RangeReader:
-    """Byte-range reader over a file or bytes that logs every (offset, length) read."""
+    """Byte-range reader over a file (positional reads, nothing loaded up front) or bytes.
+
+    `log` records every read actually issued: (offset, length) on the main file and
+    ("sidecar", offset, length) on the sidecar. Initialisation reads the first FIRST_READ bytes
+    (preamble + header) and, only if the header is longer, the rest of it.
+    """
 
     def __init__(self, src, sidecar=None):
-        self.data = Path(src).read_bytes() if not isinstance(src, (bytes, bytearray)) else bytes(src)
-        self.sidecar = Path(sidecar).read_bytes() if isinstance(sidecar, (str, Path)) else sidecar
+        self._src = _source(src)
+        self._sidecar = sidecar          # opened on first use
         self.log = []
         self._parse()
 
     def read(self, offset, length):
         self.log.append((offset, length))
-        return self.data[offset:offset + length]
+        return self._src.read_at(offset, length)
+
+    @property
+    def sidecar(self):
+        if self._sidecar is not None and not isinstance(self._sidecar, (_Bytes, _File)):
+            self._sidecar = _source(self._sidecar)
+        return self._sidecar
+
+    def close(self):
+        self._src.close()
+        if isinstance(self._sidecar, (_Bytes, _File)):
+            self._sidecar.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+        return False
 
     def _parse(self):
         head = self.read(0, FIRST_READ)
@@ -74,7 +149,7 @@ class RangeReader:
 
     @property
     def has_l3(self):
-        return bool(self.flags & FLAG_L3) or self.sidecar is not None
+        return bool(self.flags & FLAG_L3) or self._sidecar is not None
 
     def section(self, layer, plane, ty=0, tx=0):
         off, length, crc = self.sections[(layer, plane, ty, tx)]
@@ -82,7 +157,7 @@ class RangeReader:
             if self.sidecar is None:
                 raise ValueError("L3 not present (stripped); supply the .mraw.l3 sidecar")
             self.log.append(("sidecar", off - self.l3_start, length))
-            data = self.sidecar[off - self.l3_start: off - self.l3_start + length]
+            data = self.sidecar.read_at(off - self.l3_start, length)
         else:
             data = self.read(off, length)
         if zlib.crc32(data) != crc:
@@ -100,6 +175,7 @@ class RangeReader:
         return self.has_container and ("SRC", 0, 0, 0) in self.sections and self.has_l3
 
     def bytes_read(self):
+        """Bytes requested from the main file and the sidecar."""
         return sum(e[-1] for e in self.log)
 
 

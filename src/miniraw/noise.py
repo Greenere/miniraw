@@ -86,6 +86,8 @@ def _binned(mean, var, b, white, min_kept=MIN_KEPT):
         k = int(n * KEEP)
         if k < min_kept:
             continue
+        # A full sort, not a partition: with integer data many variances tie, and a partition picks
+        # different blocks among ties, changing the fit (and the encoded bytes) for ~3% of encode time.
         order = np.argsort(var[sel])[:k]
         xs.append(float(np.median(mean[sel][order])))
         vs.append(float(np.median(var[sel][order])) / selection_bias())

@@ -17,29 +17,36 @@ Decode modes: `index` (L0), `preview` (L0+L1), `signal` (L0..L2, error bounded b
 These are measured on 10 photos from a Sony A7 IV (33 MP, 14-bit, lossless-compressed ARW). Each figure is the
 median over the 10 files.
 
-- **Hot tier (L0-L2): 12.3 MB per photo, 70% smaller than the 41.2 MB ARW.** No pixel is off by more than 0.61x
+- **Hot tier (L0-L2): 11.5 MB per photo, 72% smaller than the 41.2 MB ARW.** No pixel is off by more than 0.61x
   the sensor's own noise at that brightness.
-- **Every layer together: 28.6 MB, bit-exact.** That is 31% smaller than the ARW and within 1% of JPEG XL
-  lossless, so keeping the original costs almost nothing extra. The cold layer (L3) can be split off to
-  cheaper storage.
+- **Every layer together: 27.7 MB, sensor-exact** (every sensor value bit for bit). That is 33% smaller than the
+  ARW and 2% smaller than JPEG XL lossless (28.3 MB, also sensor-only), so keeping the exact data costs nothing
+  extra. The cold layer (L3) can be split off to cheaper storage.
+- **File-exact: 30.9 MB, 25% smaller than the ARW.** This restores the original ARW byte for byte. It adds the
+  ARW's container (0.18 MB, hot) and its embedded previews (3.0 MB, cold, losslessly repacked) to the sensor
+  data.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/size_dark.svg">
-  <img alt="Bar chart of median size per photo. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 28.6 MB (bit-exact); MiniRaw hot tier 12.3 MB at step 1.0 and 10.2 MB at step 1.5." src="docs/img/size_light.svg">
+  <img alt="Bar chart of median size per photo. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.7 MB (bit-exact); MiniRaw hot tier 11.5 MB at step 1.0 and 9.5 MB at step 1.5." src="docs/img/size_light.svg">
 </picture>
+
+The step size trades hot-tier size against error. It also affects the lossless total: smaller steps shrink the
+full bit-exact file further, but make the hot tier larger (about 30% at `--step 0.5`). The default, 1.0, favours
+the hot tier.
 
 For a smaller file, the step trades size against error. In the chart below, error is in units of the sensor's own
 noise (sigma) at each pixel's brightness, so 1 sigma is "as large as the noise already in the photo".
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/quality_dark.svg">
-  <img alt="Two line charts of error against size per photo. Worst-case error: MiniRaw stays between 0.4 and 1.1 sigma from 9 to 16 MB; a fixed square-root curve needs 15 to 19 MB to get below 1.3 sigma and reaches 2.3 sigma at 10.8 MB; JPEG XL lossy is above 6 sigma at every size. Average error: MiniRaw and the square-root curve overlap; JPEG XL lossy is higher." src="docs/img/quality_light.svg">
+  <img alt="Two line charts of error against size per photo. Worst-case error: MiniRaw stays between 0.4 and 1.1 sigma from 8 to 15 MB; a fixed square-root curve needs 15 to 19 MB to get below 1.3 sigma and reaches 2.3 sigma at 10.8 MB; JPEG XL lossy is above 6 sigma at every size. Average error: MiniRaw and the square-root curve overlap; JPEG XL lossy is higher." src="docs/img/quality_light.svg">
 </picture>
 
 How to read the size-versus-error chart:
 
 - **Worst-case error is where MiniRaw differs.** MiniRaw fits the noise level for each sensor and brightness, so
-  at 10.2 MB no pixel errs by more than 0.86 sigma. At a similar 10.8 MB, a fixed square-root curve (the
+  at 9.5 MB no pixel errs by more than 0.86 sigma. At a similar 10.8 MB, a fixed square-root curve (the
   approach of in-camera lossy raw modes) reaches 2.35 sigma, in the shadows and highlights where the curve
   doesn't match the sensor. At 12.6 MB, JPEG XL lossy reaches 6.5 sigma; it is tuned for how displayed images
   look, not for raw data that will be pushed and graded.

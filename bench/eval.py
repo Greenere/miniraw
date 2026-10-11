@@ -70,8 +70,9 @@ def main():
     cfg = tomllib.loads(Path(a.config).read_text())
     step = a.step or cfg["step"]
     enc = dict(tile=cfg["tile"], effort=cfg["effort"], upsampler=cfg["upsampler"],
-               l1_mode=cfg["l1_mode"], rec=cfg["rec"], packing=cfg.get("packing", "P1"),
-               l1_min_side=cfg.get("l1_min_side", 256))
+               l1_mode=cfg["l1_mode"], rec=cfg["rec"], packing=cfg.get("packing"),
+               l1_min_side=cfg.get("l1_min_side", 256), l2_pred=cfg.get("l2_pred", "cross"))
+    b2p = cfg.get("b2_packing", cfg.get("packing", "P1"))
     path = Path(a.path)
 
     try:
@@ -106,7 +107,7 @@ def main():
 
     print("\nSizes:")
     t = time.time()
-    b2 = b2_jxl.encode_bytes(raw.planes, cfg["tile"], cfg["effort"], enc["packing"])
+    b2 = b2_jxl.encode_bytes(raw.planes, cfg["tile"], cfg["effort"], b2p)
     t_b2 = time.time() - t
     b1 = b1_native.raw_bytes(path)
     hot = sz["L0"] + sz["L1"] + sz["L2"]
@@ -157,7 +158,7 @@ def main():
         for bits in cfg["b5_bits"]:
             if bits >= raw.bit_depth:
                 continue
-            nb, dd = b5_sqrt.run(raw, bits, cfg["tile"], cfg["effort"], enc["packing"])
+            nb, dd = b5_sqrt.run(raw, bits, cfg["tile"], cfg["effort"], b2p)
             e = [metrics.stabilized_errors(raw.planes[p], dd[p], info["planes"][p]["T"]) for p in range(4)]
             print(f"  {bits:2d} bits: {nb / 1e6:7.2f} MB  {8 * nb / npx:5.2f} bpp  {nb / b2:5.3f}x B2   "
                   f"RMS {np.sqrt(np.mean([x[0] ** 2 for x in e])):.3f} sigma, max {max(x[1] for x in e):.2f} sigma")

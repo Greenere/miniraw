@@ -6,11 +6,19 @@ from bench import metrics
 from miniraw import codec, container, io_raw
 
 
-@pytest.fixture(scope="module", params=[("mean", "P1"), ("wavelet", "P1"), ("mean", "P2"),
-                                        ("mean", "P3"), ("wavelet", "PG")])
+@pytest.fixture(scope="module", params=[("mean", "P1", "cross"), ("mean", "P3", "cross"), ("mean", "P1", "l1"),
+                                        ("wavelet", "P1", "l1"), ("mean", "P2", "l1"), ("mean", "P3", "l1"),
+                                        ("wavelet", "PG", "l1")])
 def encoded(synth_image, request):
-    l1_mode, packing = request.param
-    return codec.encode(synth_image, tile=256, effort=3, l1_mode=l1_mode, packing=packing)
+    l1_mode, packing, l2_pred = request.param
+    return codec.encode(synth_image, tile=256, effort=3, l1_mode=l1_mode, packing=packing, l2_pred=l2_pred)
+
+
+@pytest.mark.parametrize("use_l1", [True, False])
+def test_cross_prediction_roundtrip_with_and_without_l1(synth_image, use_l1):
+    data, _ = codec.encode(synth_image, tile=256, effort=3, use_l1=use_l1, l2_pred="cross")
+    assert container.RangeReader(data).header["layout"]["l2_pred"] == "cross"
+    assert np.array_equal(codec.decode(data, "exact"), io_raw.unpack(synth_image.planes, synth_image.offsets))
 
 
 def test_exact_roundtrip(synth_image, encoded):

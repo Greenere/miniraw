@@ -3,7 +3,9 @@ step = 1.0
 steps = [0.5, 1.0, 1.5, 2.0]
 tile = 512
 effort = 7               # effort 9: -0.9% L2 at 4.9x encode time (bench/experiments/packing.py)
-packing = "P3"           # one 4-channel image per tile; -1.5% L2, -0.4% B2 vs P1 on dev (D21)
+l2_pred = "cross"        # cross-plane L2 prediction; -5.7 to -8.9% L2 on the A7 IV set (D24)
+packing = "P1"           # MiniRaw: per-plane images suit cross-plane residuals (P3 was best before D24)
+b2_packing = "P3"        # JPEG XL baselines keep their best packing: one 4-channel image per tile (D21)
 l1_min_side = 128        # L1 shorter side >= 128 px (spec: 256); G3 1.048 -> 1.025 on dev (D22)
 l1_mode = "mean"         # "mean" = construction A, "wavelet" = construction B; A chosen on dev (D18)
 upsampler = "bilinear"   # construction A only

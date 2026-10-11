@@ -36,7 +36,9 @@ def forward_table(T, step, white=None):
     if white is not None and white < len(T):
         inc[white - 1:] = 1.0
     v = np.concatenate([[0.0], np.cumsum(inc)])
-    return np.floor(v + 0.5).astype(np.int64)
+    q = np.floor(v + 0.5)
+    # q never exceeds xmax, so a 16-bit table (and 16-bit q planes) suffices for 16-bit raws
+    return q.astype(np.uint16 if q[-1] < 65536 else np.int64)
 
 
 def lo_from_forward(q):

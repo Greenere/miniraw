@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Cross-plane L2 prediction (format default).** G2 is predicted from the surrounding G1, and R and B from the surrounding green plus the low-pass colour difference from L1. On the Sony A7 IV set the hot tier is 4.5-5% smaller at the default effort and 6-9% smaller at effort 7. Older files decode unchanged.
+- The README reports sensor-exact and file-exact sizes separately.
+- **Efficiency (byte-identical output).**
+  - Files are read selectively with positional reads, so a header, preview or crop no longer loads the whole file (a crop reads 1.4 MB of a 28 MB file), and full signal decodes skip the cold layers.
+  - The source file is read once.
+  - q is stored as uint16 and the extra full-image copies are gone. Peak memory drops by 13-36% across encode and decode paths.
+  - `bench/experiments/prod_paths.py` measures production paths: wall time, peak memory and bytes read from disk.
+- New experiments in `bench/experiments`:
+  - `bounds.py` (noise floors and predictor rates)
+  - `l3_bound.py` (L3 context ceiling)
+  - `cross_plane.py`
+
 - **Restore the original raw file byte for byte.**
   - `miniraw decode IN.mraw OUT.ARW` (the source's own extension, matched case-insensitively) returns the identical file, checked against its SHA-256.
   - Supported where the sensor data is lossless-JPEG tiles: Sony ARW lossless and lossless DNG, any of predictors 1-7.
