@@ -33,8 +33,8 @@ def main(argv=None):
     e.add_argument("--effort", type=int, default=4, help="JPEG XL effort 1-9 (default 4; 7 is ~2x slower, ~1.7%% smaller hot tier)")
     e.add_argument("--threads", type=int, help="worker threads (default: up to 8 cores)")
     e.add_argument("--no-original", action="store_true",
-                   help="do not keep what is needed to restore the original raw file byte for byte "
-                        "(saves ~3 MB of cold data per 33 MP ARW)")
+                   help="do not keep the original raw file's container (~0.4 MB hot) and previews "
+                        "(~1-4 MB cold per 33 MP ARW): no restore to the original format")
     d = sub.add_parser("decode", help="decode to DNG (raw), JPEG/PNG/TIFF (developed), .npy (mosaic) or .json (header)")
     d.add_argument("src")
     d.add_argument("dst", help="output; the type follows the extension. Using the source file's own "
@@ -127,14 +127,23 @@ def _decode(a):
             shown = orig.get("ext") or src_ext or "unknown"
             sys.exit(f"cannot convert to {Path(a.dst).suffix}: this file came from a {shown} file. Use "
                      f"{shown} to restore the original, or .dng for a standard raw file.")
-        if src_ext != ".dng" or reader.has_original:
-            if not reader.has_original:
-                sys.exit("cannot restore the original raw file: " + dec.original_unavailable_reason()
-                         + ". Use .dng for the sensor data in a standard raw file.")
+        if reader.has_original:
             Path(a.dst).write_bytes(dec.original())
             print(f"restored the original {orig['name']} byte for byte (SHA-256 verified): {a.dst} "
                   f"({orig['size'] / 1e6:.1f} MB) in {time.perf_counter() - t0:.2f} s")
             return
+        if reader.has_container:
+            blob, mosaic = dec.near_lossless_original(a.dither)
+            _verify_raw(blob, mosaic)
+            Path(a.dst).write_bytes(blob)
+            print(f"wrote a near-lossless {orig.get('ext', ext)} (the exact original needs L3: "
+                  f"{dec.original_unavailable_reason()}): {a.dst} ({len(blob) / 1e6:.1f} MB) in "
+                  f"{time.perf_counter() - t0:.2f} s. Same format and metadata, pixels within the sensor "
+                  f"noise of the original, verified readable by LibRaw.")
+            return
+        if src_ext != ".dng":
+            sys.exit(f"cannot write {Path(a.dst).suffix}: {dec.original_unavailable_reason()}. "
+                     "Use .dng for the sensor data in a standard raw file.")
     if ext == ".json" or mode == "index":
         Path(a.dst).write_text(json.dumps(_jsonable(hd), indent=1))
         return print(f"wrote header to {a.dst}")
@@ -175,6 +184,16 @@ def _decode(a):
           f"{size / 1e6:.1f} MB) in {time.perf_counter() - t0:.2f} s")
 
 
+def _verify_raw(blob, mosaic):
+    """LibRaw must read back exactly the pixels we wrote."""
+    import io
+    import rawpy
+    with rawpy.imread(io.BytesIO(blob)) as r:
+        got = r.raw_image_visible[:mosaic.shape[0], :mosaic.shape[1]]
+        if not np.array_equal(got, mosaic):
+            sys.exit("internal error: the written raw file does not read back as the decoded pixels")
+
+
 RAW_EXTENSIONS = {".dng", ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2",
                   ".pef", ".srw", ".iiq", ".3fr", ".erf", ".kdc", ".mrw", ".x3f"}
 
@@ -193,13 +212,15 @@ def _print_info(data):
         print(f"  {k}: {sizes[k]:>10} B  {8 * sizes[k] / npx:6.3f} bpp")
     orig = hd["source"].get("original")
     if orig:
-        state = ("restorable byte for byte" if orig.get("restorable") and r.has_l3 else
-                 "restorable with the .mraw.l3 sidecar" if orig.get("restorable") else
+        state = ("restorable byte for byte" if r.has_original else
+                 "restorable byte for byte with the .mraw.l3 sidecar; near-lossless without it"
+                 if orig.get("restorable") else
+                 "near-lossless in the original format (L3 not kept)" if orig.get("container") else
                  f"not restorable ({orig.get('reason')})")
         print(f"  original: {orig['name']} ({orig['size'] / 1e6:.1f} MB), {state}")
-    for k in ("SRC",):
+    for k, what in (("CTR", "hot: original file container"), ("SRC", "cold: original's large previews")):
         if sizes.get(k):
-            print(f"  SRC: {sizes[k]:>9} B  (cold: original file container)")
+            print(f"  {k}: {sizes[k]:>9} B  ({what})")
     for i, m in enumerate(hd["noise"]["planes"]):
         print(f"  plane {io_raw.PLANE_NAMES[i]}: {m['type']}" +
               (f" a={m['a']:.3f} c={m['c']:.2f}" if m["type"] == "affine" else ""))

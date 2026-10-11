@@ -8,6 +8,11 @@
   - The TIFF structure, maker notes and embedded previews (repacked losslessly) are kept in a new cold `SRC` section. It is stripped and split together with L3.
   - `encode` verifies exact reproduction up front and records why when a file isn't supported. `--no-original` opts out.
   - `unbundle` now restores originals by default (`--raw-as original`) and falls back to DNG.
+- **Raws in their original format without L3.** Decoding to the source extension (or `unbundle`) without the bit-exact layer now writes a valid file in the original raw format (ARW, ...) holding the near-lossless pixels.
+  - The original's container (about 0.4 MB) is kept in the hot tier (`CTR` section). Only the large embedded previews stay cold (`SRC`).
+  - Tiles are re-encoded with the original Huffman tables and packed into the original tile block, so the file is about the original's size.
+  - The full-size preview is regenerated at the highest JPEG quality that fits its original slot.
+  - Every written file is checked by reading it back with LibRaw.
 
 - **`miniraw bundle DIR OUT.zip` / `miniraw unbundle IN.zip DIR`.**
   - Raws are encoded to `.mraw`, JPEGs repacked losslessly with JPEG XL (byte-exact), and PNGs optionally repacked (pixel-exact); everything else is stored.

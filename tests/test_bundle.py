@@ -8,7 +8,7 @@ import imagecodecs
 import numpy as np
 import pytest
 
-from miniraw import bundle, cli, container, export, io_raw
+from miniraw import bundle, cli, codec, container, export, io_raw
 
 rawpy = pytest.importorskip("rawpy")
 
@@ -34,6 +34,11 @@ def folder(synth_image, tmp_path):
     return src, mosaic
 
 
+def out_member(zip_path, name):
+    with zipfile.ZipFile(zip_path) as zf:
+        return zf.read(name)
+
+
 def _hash(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -57,11 +62,12 @@ def test_roundtrip(folder, tmp_path, cold):
     if cold != "drop":
         assert _hash(restored / "IMG_0001.dng") == _hash(src / "IMG_0001.dng")
         assert stats["raw_original"] == 1
-    else:
+    else:   # no L3: a valid file in the original format holding the near-lossless pixels
+        near = codec.decode(out_member(out, "IMG_0001.dng.mraw"), "signal")
         with rawpy.imread(str(restored / "IMG_0001.dng")) as r:
             got = r.raw_image_visible[:mosaic.shape[0], :mosaic.shape[1]]
-            assert not np.array_equal(got, mosaic)
-        assert stats["raw_signal"] == 1
+            assert np.array_equal(got, near) and not np.array_equal(got, mosaic)
+        assert stats["raw_near_lossless"] == 1
 
 
 def test_split_without_l3_falls_back_to_signal(folder, tmp_path):
@@ -70,7 +76,7 @@ def test_split_without_l3_falls_back_to_signal(folder, tmp_path):
     bundle.bundle(src, out, effort=3, cold="split", log=lambda *a: None)
     (tmp_path / "b.l3.zip").rename(tmp_path / "elsewhere.zip")
     stats = bundle.unbundle(out, tmp_path / "r1", log=lambda *a: None)
-    assert stats["raw_signal"] == 1 and stats["raw_original"] == 0
+    assert stats["raw_near_lossless"] == 1 and stats["raw_original"] == 0
     stats = bundle.unbundle(out, tmp_path / "r2", l3=tmp_path / "elsewhere.zip", log=lambda *a: None)
     assert stats["raw_original"] == 1
     assert _hash(tmp_path / "r2" / "IMG_0001.dng") == _hash(src / "IMG_0001.dng")

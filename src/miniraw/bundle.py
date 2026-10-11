@@ -118,8 +118,7 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
                 try:
                     raw = io_raw.read(p)
                     mr, _ = codec.encode(raw, step=step, effort=effort, threads=threads,
-                                         with_l3=cold != "drop", source={"file": p.name},
-                                         keep_original=cold != "drop")
+                                         with_l3=cold != "drop", source={"file": p.name}, keep_original=True)
                     hdr = container.RangeReader(mr).header
                     restorable = bool((hdr["source"].get("original") or {}).get("restorable"))
                     e.update(kind="raw", member=f"{rel}.mraw", mosaic_sha256=hdr["source"]["sha256"],
@@ -130,8 +129,11 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
                         e["l3_member"] = f"{rel}.mraw.l3"
                         total_l3 += len(l3)
                     payload = mr
+                    container_kept = bool((hdr["source"].get("original") or {}).get("container"))
+                    e["container"] = container_kept
                     note = ("raw, original restorable byte for byte" if restorable else "raw, bit-exact sensor data") \
-                        if cold == "keep" else ("raw, L3 split off" if cold == "split" else "raw, near-lossless")
+                        if cold == "keep" else ("raw, L3 split off" if cold == "split" else
+                                                "raw, near-lossless" + (" (original format kept)" if container_kept else ""))
                 except io_raw.NotBayer as err:
                     note = f"raw stored as-is (not 2x2 Bayer: {err})"
                 except Exception as err:  # unreadable or unsupported raw: keep the original
@@ -211,7 +213,8 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
     if l3 is None:
         cand = src.with_name(src.name[:-4] + ".l3.zip" if src.name.endswith(".zip") else src.name + ".l3.zip")
         l3 = cand if cand.exists() else None
-    stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0, "raw_original": 0, "raw_fallback": 0}
+    stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0, "raw_original": 0, "raw_fallback": 0,
+             "raw_near_lossless": 0}
     with zipfile.ZipFile(src) as zf, (zipfile.ZipFile(l3) if l3 else _Null()) as zl3:
         m = read_manifest(zf)
         files = m["files"]
@@ -233,6 +236,11 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                     stats["verified"] += 1
                     stats["raw_original"] += 1
                     note = "original, byte-identical"
+                elif raw_as == "original" and reader.has_container:
+                    blob, _ = codec.Decoder(reader, threads).near_lossless_original()
+                    out.write_bytes(blob)
+                    stats["raw_near_lossless"] += 1
+                    note = f"{rel.suffix.lstrip('.').upper()}, near-lossless (no L3)"
                 elif raw_as == "mraw":
                     out = out.with_name(out.name + ".mraw")
                     out.write_bytes(payload)
@@ -289,6 +297,9 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
         f"{stats['verified']} verified against the original hashes")
     if stats["raw_original"]:
         log(f"{stats['raw_original']} raw file(s) restored byte for byte")
+    if stats["raw_near_lossless"]:
+        log(f"{stats['raw_near_lossless']} raw file(s) written in their original format with near-lossless pixels "
+            "(L3 not available: bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")
     if stats["raw_signal"] and raw_as in ("dng", "original"):
         log(f"note: {stats['raw_signal']} raw file(s) restored near-lossless because their L3 layer is missing "
             f"(bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")

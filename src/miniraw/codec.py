@@ -90,8 +90,9 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17).
     threads: worker threads for planes and tiles (output is identical for any value).
     diagnostics: also re-validate isotonic fallbacks (benchmark reporting only).
-    keep_original: also store what is needed to restore the source raw file byte for byte
-    (cold SRC section; needs with_l3 and a supported source, see source.py).
+    keep_original: also store the source raw file's container (hot CTR section) and its large
+    previews (cold SRC, only with L3). With L3 the original file restores byte for byte; without
+    it a valid file in the same format is written around the near-lossless pixels (source.py).
 
     Returns (file bytes, info dict). info holds per-plane T tables and q planes
     for the benchmark's metrics; they are not part of the file.
@@ -135,18 +136,20 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
             sections += list(ex.map(lambda p: (("L1", p, 0, 0), entropy.jxl_encode(st[p]["l1"], effort)), range(4)))
 
     original = None
-    if keep_original and with_l3 and raw.meta.get("path"):
+    if keep_original and raw.meta.get("path"):
         from . import source as source_mod
         path = raw.meta["path"]
         blob = open(path, "rb").read()
         original = {"name": os.path.basename(path), "ext": os.path.splitext(path)[1], "size": len(blob),
                     "sha256": hashlib.sha256(blob).hexdigest()}
         try:
-            sections.append((("SRC", 0, 0, 0), source_mod.capture(path, io_raw.unpack(planes, raw.offsets),
-                                                                 threads)))
-            original["restorable"] = True
+            ctr, previews = source_mod.capture(path, io_raw.unpack(planes, raw.offsets), threads)
+            sections.append((("CTR", 0, 0, 0), ctr))
+            if with_l3:
+                sections.append((("SRC", 0, 0, 0), previews))
+            original.update(container=True, restorable=with_l3)
         except source_mod.Unsupported as e:
-            original.update(restorable=False, reason=str(e))
+            original.update(container=False, restorable=False, reason=str(e))
 
     h, w = raw.sensor_shape
     header = {
@@ -262,17 +265,27 @@ class Decoder:
         if not self.r.has_original:
             raise ValueError("this file cannot restore its original raw file: "
                              + self.original_unavailable_reason())
-        return source_mod.restore(self.r.section("SRC", 0), self.mosaic("exact"), self.threads)
+        return source_mod.restore(self.r.section("CTR", 0), self.r.section("SRC", 0), self.mosaic("exact"),
+                                  self.threads)
+
+    def near_lossless_original(self, dither=False):
+        """A valid file in the source raw format holding the near-lossless (signal-mode) pixels."""
+        from . import export, source as source_mod
+        if not self.r.has_container:
+            raise ValueError("this file cannot write its original raw format: " + self.original_unavailable_reason())
+        mosaic = self.mosaic("signal", dither=dither)
+        render = export.preview_renderer(mosaic, self.r.header)
+        return source_mod.write_near_lossless(self.r.section("CTR", 0), mosaic, render, self.threads), mosaic
 
     def original_unavailable_reason(self):
         orig = self.r.header["source"].get("original")
         if not orig:
-            return "it was encoded without the original container (--no-original or --no-l3)"
-        if not orig.get("restorable"):
-            return f"the source format is not supported for exact restore ({orig.get('reason')})"
+            return "it was encoded without the original container (--no-original)"
+        if not orig.get("container", orig.get("restorable")):
+            return f"the source format is not supported ({orig.get('reason')})"
         if not self.r.has_l3:
-            return "the cold layer is stripped; pass --sidecar FILE.mraw.l3"
-        return "unknown"
+            return "the cold layer (L3) is not present"
+        return "the original's large previews were not kept"
 
     def preview_mosaic(self):
         """Low-resolution mosaic from L0 + L1 only, plus a header adjusted to its size,

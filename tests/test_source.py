@@ -69,6 +69,12 @@ def test_cli_restores_original_byte_for_byte(ljpeg_dng, tmp_path):
     cli.main(["decode", str(tmp_path / "h.mraw"), str(tmp_path / "back2.dng"),
               "--sidecar", str(tmp_path / "h.mraw.l3")])
     assert (tmp_path / "back2.dng").read_bytes() == src.read_bytes()
+    # without the sidecar: a valid file in the original format around the near-lossless pixels
+    cli.main(["decode", str(tmp_path / "h.mraw"), str(tmp_path / "near.dng")])
+    import rawpy
+    near = codec.decode(tmp_path / "h.mraw", "signal")
+    with rawpy.imread(str(tmp_path / "near.dng")) as r:
+        assert np.array_equal(r.raw_image_visible[:near.shape[0], :near.shape[1]], near)
     with pytest.raises(SystemExit):
         cli.main(["decode", str(mr), str(tmp_path / "x.ARW")])          # cannot change raw format
 
@@ -96,9 +102,15 @@ ARWS = sorted(glob.glob(str(ROOT / "data" / "personal_raws" / "*.ARW")))
 
 
 @pytest.mark.skipif(not ARWS, reason="no real ARW files in data/personal_raws")
-def test_real_arw_restores_byte_for_byte(tmp_path):
+def test_real_arw_restores_byte_for_byte_and_near_lossless_without_l3(tmp_path):
+    import rawpy
     src = Path(ARWS[0])
     mr = tmp_path / "r.mraw"
     cli.main(["encode", str(src), str(mr)])
     cli.main(["decode", str(mr), str(tmp_path / src.name)])
     assert hashlib.sha256((tmp_path / src.name).read_bytes()).digest() == hashlib.sha256(src.read_bytes()).digest()
+    cli.main(["encode", str(src), str(tmp_path / "n.mraw"), "--no-l3"])
+    cli.main(["decode", str(tmp_path / "n.mraw"), str(tmp_path / "near.ARW")])
+    near = codec.decode(tmp_path / "n.mraw", "signal")
+    with rawpy.imread(str(tmp_path / "near.ARW")) as r:
+        assert np.array_equal(r.raw_image_visible[:near.shape[0], :near.shape[1]], near)

@@ -111,14 +111,55 @@ def dng_bytes(mosaic, header, compress=False):
     return buf.getvalue()
 
 
-def develop(mosaic, header, exposure=0.0, bits=8, half_size=False, auto_bright=True):
-    """Develop a mosaic to RGB with LibRaw via an in-memory DNG (orientation applied)."""
+def develop(mosaic, header, exposure=0.0, bits=8, half_size=False, auto_bright=True, orient=True):
+    """Develop a mosaic to RGB with LibRaw via an in-memory DNG (orientation applied unless orient=False)."""
     import rawpy
 
     with rawpy.imread(io.BytesIO(dng_bytes(mosaic, header))) as r:
         return r.postprocess(use_camera_wb=True, output_bps=bits, half_size=half_size,
                              exp_shift=2.0 ** exposure, exp_preserve_highlights=0.0,
-                             no_auto_bright=not auto_bright)
+                             no_auto_bright=not auto_bright, **({} if orient else {"user_flip": 0}))
+
+
+def resize(img, h, w):
+    """Bilinear resize of an HxWxC uint8 image (area-averaged first when shrinking a lot)."""
+    while img.shape[0] >= 2 * h and img.shape[1] >= 2 * w:
+        hh, ww = img.shape[0] // 2 * 2, img.shape[1] // 2 * 2
+        img = img[:hh, :ww].reshape(hh // 2, 2, ww // 2, 2, -1).mean(axis=(1, 3))
+    img = img.astype(np.float32)
+    ys = np.clip((np.arange(h) + 0.5) * img.shape[0] / h - 0.5, 0, img.shape[0] - 1)
+    xs = np.clip((np.arange(w) + 0.5) * img.shape[1] / w - 0.5, 0, img.shape[1] - 1)
+    y0, x0 = ys.astype(int), xs.astype(int)
+    y1, x1 = np.minimum(y0 + 1, img.shape[0] - 1), np.minimum(x0 + 1, img.shape[1] - 1)
+    fy, fx = (ys - y0)[:, None, None], (xs - x0)[None, :, None]
+    top = img[y0][:, x0] * (1 - fx) + img[y0][:, x1] * fx
+    bot = img[y1][:, x0] * (1 - fx) + img[y1][:, x1] * fx
+    return np.ascontiguousarray(np.clip(top * (1 - fy) + bot * fy + 0.5, 0, 255).astype(np.uint8))
+
+
+def preview_renderer(mosaic, header, qualities=(92, 88, 84, 80, 75, 70, 60)):
+    """render(h, w, max_bytes) -> JPEG of the developed mosaic at h x w (sensor orientation),
+    at the highest quality that fits max_bytes (the lowest listed one if none does)."""
+    import imagecodecs
+    cache = {}
+
+    def render(h, w, max_bytes=None):
+        half = mosaic.shape[0] >= 4 * h
+        if half not in cache:
+            cache[half] = develop(mosaic, header, half_size=half, orient=False)
+        img = cache[half]
+        crop = (header.get("sensor") or {}).get("crop")
+        if crop and not half and (crop[3], crop[2]) == (h, w) and img.shape[0] >= crop[1] + h \
+                and img.shape[1] >= crop[0] + w:
+            img = np.ascontiguousarray(img[crop[1]:crop[1] + h, crop[0]:crop[0] + w])   # the default crop
+        elif img.shape[:2] != (h, w):
+            img = resize(img, h, w)
+        for q in qualities:
+            jpg = bytes(imagecodecs.jpeg8_encode(img, level=q))
+            if max_bytes is None or len(jpg) <= max_bytes:
+                break
+        return jpg
+    return render
 
 
 def _exif_app1(header):

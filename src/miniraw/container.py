@@ -1,7 +1,9 @@
 """.mraw container: 16-byte preamble, zstd-MessagePack header, sections (spec 5).
 
-Section order on disk is L1, L2, L3, SRC so truncating at the first L3 byte drops
-the cold layers (L3, and SRC: what is needed to restore the original raw file).
+Section order on disk is L1, L2, CTR, L3, SRC. Truncating at the first L3 byte
+drops the cold layers: L3 (exact sensor data) and SRC (large embedded previews of
+the original raw file). CTR, the original file's container, stays hot so a valid
+file in the original format can still be written around near-lossless pixels.
 All offsets are absolute.
 """
 import struct
@@ -16,7 +18,7 @@ VERSION = 1
 FLAG_L3 = 1
 PREAMBLE = struct.Struct("<4sHHII")
 FIRST_READ = 16 * 1024
-LAYER_ORDER = {"L1": 1, "L2": 2, "L3": 3, "SRC": 4}
+LAYER_ORDER = {"L1": 1, "L2": 2, "CTR": 3, "L3": 4, "SRC": 5}
 COLD = ("L3", "SRC")
 
 
@@ -88,15 +90,21 @@ class RangeReader:
         return data
 
     @property
+    def has_container(self):
+        """The original raw file's container is stored (hot)."""
+        return ("CTR", 0, 0, 0) in self.sections
+
+    @property
     def has_original(self):
-        return ("SRC", 0, 0, 0) in self.sections and self.has_l3
+        """The original raw file can be restored byte for byte."""
+        return self.has_container and ("SRC", 0, 0, 0) in self.sections and self.has_l3
 
     def bytes_read(self):
         return sum(e[-1] for e in self.log)
 
 
 def layer_sizes(header):
-    out = {"L1": 0, "L2": 0, "L3": 0, "SRC": 0}
+    out = {"L1": 0, "L2": 0, "CTR": 0, "L3": 0, "SRC": 0}
     for layer, _, _, _, _, length, _ in header["sections"]:
         out[layer] += length
     return out

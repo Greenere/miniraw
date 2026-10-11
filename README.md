@@ -81,7 +81,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 miniraw encode IN.ARW OUT.mraw [--step 1.0] [--effort 4] [--no-l3] [--no-original] [--threads N]
 
 # decode: the output type follows the extension
-miniraw decode IN.mraw OUT.ARW                 # the original raw file, byte for byte (SHA-256 verified)
+miniraw decode IN.mraw OUT.ARW                 # the original raw file: byte for byte with L3, near-lossless without
 miniraw decode IN.mraw OUT.dng                 # raw again: bit-exact sensor data (verified), lossless-JPEG DNG
 miniraw decode IN.mraw OUT.jpg                 # developed with LibRaw, camera WB, EXIF kept
 miniraw decode IN.mraw OUT.png --bits 16       # also .tif; --exposure EV, --half-size, --no-auto-bright
@@ -105,9 +105,19 @@ case-insensitively) re-encodes the tiles with the file's own Huffman tables and 
 checked against its SHA-256.
 
 This is verified when encoding. If a file can't be reproduced exactly, `encode` says why, and decoding to `.dng`
-still works. The extra data sits in the cold tier: about 3 MB per 33 MP ARW, mostly the camera's embedded
-full-size JPEG preview. `--no-original` skips it. Raw formats that compress the sensor data differently (NEF,
-CR2, CR3, compressed ARW, ...) restore as DNG.
+still works.
+
+What it costs, per 33 MP ARW:
+- **Hot tier: about 0.4 MB** for the container (TIFF structure, maker notes, small previews).
+- **Cold tier: about 1-4 MB** for the camera's full-size preview JPEG, repacked losslessly.
+
+**Without L3** (`--no-l3`, `strip`, `bundle --cold drop`), decoding to `OUT.ARW` still gives a valid ARW: same
+structure, maker notes and EXIF, with the near-lossless pixels and a full-size preview regenerated from them. It is
+checked by reading it back with LibRaw, opens like any ARW, and is about the original's size. It is not
+byte-identical, since the exact pixels live in L3.
+
+`--no-original` skips the container and previews. Raw formats that compress the sensor data differently (NEF, CR2,
+CR3, compressed ARW, ...) decode to DNG.
 
 ## Bundle a whole folder
 
@@ -135,6 +145,10 @@ restored file against it and restores the modification times. On 10 Sony A7 IV R
 became a 355 MB bundle (-22%), and unbundling gave back an identical folder: `diff -r` is clean, including all 10
 ARWs byte for byte. With `--cold split`, the main zip holds the near-lossless raws and the JPEGs (153 MB). The
 `.l3.zip` holds everything needed to restore the exact originals.
+
+Without the `.l3.zip`, or with `--no-l3`, unbundling still gives back ARWs under their original names, holding
+near-lossless pixels. On the same folder, a `--no-l3` bundle is 155 MB (-66%) and unbundles to 10 valid ARWs plus
+the identical JPEGs.
 
 **Why JPEG and PNG don't get MiniRaw's treatment.** MiniRaw saves space by not storing the random sensor noise in
 linear raw data. By the time a photo is a JPEG or PNG, it has been demosaiced, denoised, tone-curved and rounded
