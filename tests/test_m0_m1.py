@@ -97,6 +97,27 @@ def test_bound_holds_at_large_steps(step):
     assert vst.bound_check(T, fwd, rec, step).max() <= 1e-9
 
 
+def test_failing_bins_are_trimmed_not_halved():
+    """D31: a bin that misses the bound is trimmed at the top, so the table keeps about as many bins as the
+    uniform one. Halving (D27) doubled the bins holding nearly every pixel of a dark ISO 12800 Sony A7 IV frame."""
+    model = {"type": "affine", "a": 10.66, "b": 512.0, "c": 0.0}
+    T = vst.T_table(model, 16383)
+
+    def uniform(step):
+        inc = np.minimum(1.0, np.diff(T) / step)
+        inc[16382:] = 1.0
+        return np.floor(np.concatenate([[0.0], np.cumsum(inc)]) + 0.5).astype(np.int64)
+
+    assert np.array_equal(vst.forward_table(T, 1.0, 16383), uniform(1.0))     # nothing fails: unchanged
+    for step in (1.5, 2.0, 3.0):
+        q0, fwd = uniform(step), vst.forward_table(T, step, 16383).astype(np.int64)
+        n, rec = vst.tables_from_lo(vst.lo_from_forward(fwd), 16383)
+        assert vst.bound_check(T, fwd, rec, step).max() <= 1e-9
+        n0, rec0 = vst.tables_from_lo(vst.lo_from_forward(q0), 16383)
+        failing = len(np.unique(q0[vst.bound_check(T, q0, rec0, step) > 1e-9]))
+        assert failing and fwd[-1] - q0[-1] <= 2
+
+
 def test_header_stats_match_known_noise(synth_image):
     """stats.snr18 follows from the noise model relative to full scale (D28)."""
     from miniraw import container, stats

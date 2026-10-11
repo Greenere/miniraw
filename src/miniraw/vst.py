@@ -38,18 +38,41 @@ def forward_table(T, step, white=None):
     v = np.concatenate([[0.0], np.cumsum(inc)])
     q = np.floor(v + 0.5).astype(np.int64)
     # The decoder reconstructs at the bin's middle DN, not its T-midpoint. Where T curves enough inside a wide bin
-    # (large steps), that point can miss the bound by up to ~0.01 sigma; split those bins (D27). Encoder-only:
-    # the decoder reads just the bin starts. No bin is split at the default step on any benchmark image.
-    for _ in range(32):
-        lo = lo_from_forward(q)
-        n, rec = tables_from_lo(lo, len(q) - 1)
-        bad = np.unique(q[bound_check(T, q, rec, step) > 1e-9])
-        bad = bad[n[bad] > 1]
-        if not len(bad):
-            break
-        q = forward_from_lo(np.sort(np.concatenate([lo, lo[bad] + n[bad] // 2])), len(q) - 1)
+    # (large steps), that point can miss the bound by up to ~0.02 sigma (D27). From the first such bin on, each bin
+    # is trimmed at the top until it passes and the leftover DNs start the next bin (D31; halving them, as D27 did,
+    # doubled the codes where a dark high-ISO frame keeps nearly all its pixels). Encoder-only: the decoder reads
+    # just the bin starts. Tables with no failing bin are unchanged, as at the default step on every benchmark image.
+    lo = lo_from_forward(q)
+    n, rec = tables_from_lo(lo, len(q) - 1)
+    bad = np.flatnonzero(bound_check(T, q, rec, step) > 1e-9)
+    if len(bad):
+        q = forward_from_lo(_trim_bins(T, step, lo, q[bad[0]]), len(q) - 1)
     # q never exceeds xmax, so a 16-bit table (and 16-bit q planes) suffices for 16-bit raws
     return q.astype(np.uint16 if q[-1] < 65536 else np.int64)
+
+
+def _trim_bins(T, step, lo, first):
+    """Bin starts with bins from index `first` on trimmed at the top until the middle DN keeps the bound."""
+    slack = step / 2 + _one_dn(T) + 1e-9
+    ends = np.concatenate([lo[1:], [len(T)]])
+    starts, s = list(lo[:first]), int(lo[first])
+    i = first
+    while s < len(T):
+        e = int(ends[min(i, len(ends) - 1)])    # past the last bin, the leftover runs to the end
+        i += 1
+        if e <= s:          # swallowed by a bin that started early with an earlier bin's leftover
+            continue
+        while e - s > 1 and np.any(np.abs(T[s:e] - T[s + (e - s - 1) // 2]) > slack[s:e]):
+            e -= 1
+        starts.append(s)
+        s = e
+    return np.array(starts, np.int64)
+
+
+def _one_dn(T):
+    """|dT| over one DN at each x, the larger of its two neighbours (the bound's slack)."""
+    slope = np.abs(np.diff(T))
+    return np.maximum(np.concatenate([slope, [slope[-1]]]), np.concatenate([[slope[0]], slope]))
 
 
 def lo_from_forward(q):
@@ -87,8 +110,7 @@ def ceil_allowed_bits(T, fwd, step):
     floor offset inside each bin; all other bins use the floor (D30)."""
     lo = lo_from_forward(fwd)
     n, rec = tables_from_lo(lo, len(fwd) - 1)
-    slope = np.abs(np.diff(T))
-    one_dn = np.maximum(np.concatenate([slope, [slope[-1]]]), np.concatenate([[slope[0]], slope]))
+    one_dn = _one_dn(T)
     q = fwd.astype(np.int64)
     ceil = rec[q] + 1
     ok_dn = np.abs(T - T[np.minimum(ceil, len(T) - 1)]) <= step / 2 + one_dn + 1e-9
@@ -103,7 +125,6 @@ def bound_check(T, fwd, rec, step):
     worst excess. Applied to pixels through a histogram, so every pixel is covered.
     """
     err = np.abs(T - T[rec[fwd]])
-    slope = np.abs(np.diff(T))
-    one_dn = np.maximum(np.concatenate([slope, [slope[-1]]]), np.concatenate([[slope[0]], slope]))
+    one_dn = _one_dn(T)
     excess = err - (step / 2 + one_dn)
     return excess
