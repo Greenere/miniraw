@@ -1,6 +1,6 @@
 # MiniRaw
 
-A layered RAW codestream, Phase 1 prototype (formerly "StrataRAW"; see [SPEC.md](SPEC.md)).
+A layered RAW codestream, v1.0 (Phase 1 of [SPEC.md](SPEC.md); formerly "StrataRAW").
 
 | Layer | Contents |
 | --- | --- |
