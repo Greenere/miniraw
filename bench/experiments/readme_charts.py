@@ -153,16 +153,84 @@ def quality_chart(df, t, path, camera):
     plt.close(fig)
 
 
+def speed_chart(sp, errs, t, path, camera, ref):
+    """Encode time (log x) versus median size: lossless panel and near-lossless/lossy panel."""
+    med = sp.groupby(["method", "kind"])[["bytes", "seconds"]].median().reset_index()
+    style_of = {"lossless": (t["ink2"], "o", "General-purpose codec"),
+                "miniraw-lossless": (t["series"][0], "o", "MiniRaw"),
+                "miniraw-hot": (t["series"][0], "D", "MiniRaw hot tier (every pixel within 1 sigma)"),
+                "lossy": (t["series"][1], "s", "Lossy (worst pixel beyond the sensor noise)")}
+    # (dx, dy) label offsets in points, chosen per method so labels clear markers and each other
+    offsets = {"JPEG-LS lossless": (7, 4), "JPEG XL lossless, effort 4": (0, 9),
+               "JPEG XL lossless, effort 7": (0, 9), "ZIP / Deflate": (8, -3),
+               "MiniRaw, all layers, effort 4": (-6, -8), "MiniRaw, all layers, effort 7": (6, -8),
+               "MiniRaw hot tier, effort 4": (-9, 3), "MiniRaw hot tier, effort 7": (9, 3),
+               "JPEG XL lossy, distance 0.1": (0, -16), "Square-root curve 9-bit + JPEG XL": (0, -16)}
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.6), dpi=100, sharex=True,
+                             gridspec_kw={"width_ratios": [1, 1]})
+    fig.patch.set_facecolor(t["surface"])
+    panels = ((axes[0], ("lossless", "miniraw-lossless"), (20, ref["unc"] * 1.06), "Lossless (exact sensor data)"),
+              (axes[1], ("miniraw-hot", "lossy"), (0, 15), "Near-lossless and lossy"))
+    handles = {}
+    for ax, kinds, ylim, title in panels:
+        style(ax, t)
+        ax.set_xscale("log")
+        ax.set_ylim(*ylim)
+        ax.set_title(title, color=t["ink"], fontsize=10, loc="left")
+        if kinds[0] == "lossless":
+            for y, label in ((ref["unc"], "Uncompressed"), (ref["arw"], "Sony ARW (encoded in camera)")):
+                ax.axhline(y, color=t["muted"], linewidth=1, linestyle=(0, (4, 3)), zorder=1)
+                ax.text(0.99, y, label + " ", transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+                        fontsize=8, color=t["muted"])
+        for _, r in med[med["kind"].isin(kinds)].iterrows():
+            color, marker, legend = style_of[r["kind"]]
+            x, y = r["seconds"], r["bytes"] / 1e6
+            h = ax.scatter([x], [y], s=70, color=color, marker=marker, edgecolors=t["surface"], linewidths=1.5,
+                           zorder=3)
+            handles.setdefault(legend, h)
+            dx, dy = offsets.get(r["method"], (6, 4))
+            label = r["method"].replace("MiniRaw, all layers", "MiniRaw").replace(", effort", ", e")
+            label = label.replace("JPEG XL lossless", "JPEG XL").replace("MiniRaw hot tier", "MiniRaw hot")
+            label += f"\n{y:.1f} MB, {x:.2g} s"
+            if r["method"] in errs:
+                label += f", worst {errs[r['method']]:.1f}\u03c3"
+            ax.annotate(label, (x, y), xytext=(dx, dy), textcoords="offset points", fontsize=7.5,
+                        ha="left" if dx > 0 else ("right" if dx < 0 else "center"),
+                        va="bottom" if dy > 0 else "top",
+                        color=t["ink"] if "MiniRaw" in r["method"] else t["ink2"],
+                        fontweight="bold" if "MiniRaw" in r["method"] else "normal")
+        ax.set_xlim(0.08, 10)
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g} s"))
+        ax.set_xlabel("Encode time per photo (log scale)", color=t["ink2"], fontsize=9)
+    axes[0].set_ylabel("Median size per photo (MB)", color=t["ink2"], fontsize=9)
+    leg = fig.legend(list(handles.values()), list(handles.keys()), loc="lower center", ncol=4, fontsize=8,
+                     frameon=False, labelcolor=t["ink2"], bbox_to_anchor=(0.5, -0.01))
+    fig.suptitle(f"Encode speed versus size: {camera}, median of {sp['file'].nunique()} files, Apple M1, 8 threads "
+                 "(lower-left is better)", x=0.02, ha="left", color=t["ink"], fontsize=11, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    fig.savefig(path, facecolor=t["surface"])
+    plt.close(fig)
+
+
 def main(name, review=None):
     df = load(name)
     camera = df["camera"].mode()[0].replace("SONY ILCE-7M4", "Sony A7 IV")
     OUT.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": ["Helvetica", "Arial", "DejaVu Sans"], "svg.fonttype": "path"})
     for mode, t in THEMES.items():
+        speed_csv = ROOT / "results" / "experiments" / f"speed_{name}.csv"
+        sp = pd.read_csv(speed_csv) if speed_csv.exists() else None
+        if sp is not None:
+            errs = {"MiniRaw hot tier, effort 7": float(np.median(df["stab_maxerr"])),
+                    "JPEG XL lossy, distance 0.1": float(np.median(df["B4_0.1_stab_maxerr"])),
+                    "Square-root curve 9-bit + JPEG XL": float(np.median(df["B5_9_stab_maxerr"]))}
+            ref = {"unc": float(np.median(sp["unc_bytes"])) / 1e6, "arw": float(np.median(sp["file_bytes"])) / 1e6}
         for ext in ("svg",) + (("png",) if review else ()):
             dst = (Path(review) if ext == "png" else OUT)
             size_chart(df, t, dst / f"size_{mode}.{ext}", camera)
             quality_chart(df, t, dst / f"quality_{mode}.{ext}", camera)
+            if sp is not None:
+                speed_chart(sp, errs, t, dst / f"speed_{mode}.{ext}", camera, ref)
     print("wrote", sorted(p.name for p in OUT.glob("*.svg")))
 
 

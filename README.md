@@ -53,6 +53,28 @@ How to read the size-versus-error chart:
 - **Average error is a tie with the square-root curve.** The saving comes from not storing noise. Calibration
   adds a guarantee for every pixel, not a smaller average.
 
+Encode speed matters as much as size for day-to-day use:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/speed_dark.svg">
+  <img alt="Two scatter charts of encode time against size. Lossless: JPEG-LS 28.8 MB in 0.15 s; JPEG XL effort 4 29.2 MB in 0.8 s; MiniRaw effort 4 28.1 MB in 1.7 s; MiniRaw effort 7 27.7 MB in 3.4 s; JPEG XL effort 7 28.3 MB in 4.5 s; ZIP 47.5 MB in 2.4 s. Near-lossless and lossy: MiniRaw hot tier 11.9 MB in 1.4 s (effort 4) and 11.5 MB in 3.1 s (effort 7), worst pixel 0.6 sigma; square-root curve 10.8 MB in 3.0 s, worst 2.3 sigma; JPEG XL lossy 7.7 MB in 2.9 s, worst 8.8 sigma." src="docs/img/speed_light.svg">
+</picture>
+
+- **Lossless.**
+  - At effort 7, MiniRaw is smaller *and* faster than JPEG XL lossless: 27.7 MB in 3.4 s against 28.3 MB in
+    4.5 s. JPEG XL finds MiniRaw's prediction residuals cheaper to model than raw pixels, and the exact layer
+    is range-coded.
+  - At the default effort 4, MiniRaw takes 1.7 s for 28.1 MB.
+  - JPEG-LS is the fastest lossless option (0.15 s) and about 4% larger.
+- **Near-lossless.**
+  - MiniRaw's hot tier encodes in 1.4 s (effort 4) and keeps every pixel within the sensor noise.
+  - The lossy methods reach similar or smaller sizes in about 3 s, but their worst pixels are 2-9x the noise.
+
+Timing: Apple M1, from sensor data already in memory, so reading the file and decoding the raw are excluded.
+Tiled codecs encode the four Bayer planes in 512-pixel tiles on 8 threads, as MiniRaw does. ZIP is
+single-threaded, as zip tools are. The camera's own ARW encoder runs in hardware and is shown only as a size line.
+Medians of 10 files; the data is in `results/experiments/speed_personal_raws.csv`.
+
 Methods, all on the same sensor data:
 - JPEG-LS, JPEG XL lossless and the square-root curve code the four Bayer planes in 512-pixel tiles at JPEG XL
   effort 7, the same tiles and effort as MiniRaw.
@@ -71,6 +93,7 @@ To regenerate the charts from your own files:
 ```sh
 python -m bench.run --dir YOUR_FOLDER --quick
 python -m bench.experiments.readme_chart_data YOUR_FOLDER
+python -m bench.experiments.speed_chart_data YOUR_FOLDER
 python -m bench.experiments.readme_charts YOUR_FOLDER_NAME
 ```
 
