@@ -16,7 +16,9 @@ Arms (all oriented for display, 8-bit sRGB):
   E          the thumbnail LibRaw extracts from the original file (what photo apps index)
   L1-k       L1 at k = k0/2, k0, 2*k0, as a mosaic developed by the same LibRaw call as R
   L1-k-half  the same mosaic developed at half size: one RGB pixel per 2x2 cell, no demosaic interpolation
-  L1-spec    L1 at k0 through the spec 4.7 numpy render (Decoder.preview)
+  L1-spec    L1 at k0 through the spec 4.7 numpy render (format 1 Decoder.preview)
+  IDX        format 2's index thumbnail as the encoder stores it (D29); IDX-int8 is its embedding quantized
+             to int8 as stored in the header (metrics only)
 """
 import argparse
 import io
@@ -122,7 +124,7 @@ def prepare_one(args):
 
     # L1 arms. k0 is the format default; the real encoder's L1 is checked against the direct one at k0.
     k0 = layers.choose_k(raw.planes.shape[1:], 128)
-    data, _ = codec.encode(raw, step=1.0, effort=4, with_l3=False, keep_original=False, threads=2)
+    data, _ = codec.encode(raw, step=1.0, effort=4, with_l3=False, keep_original=False, threads=2, format_version=1)
     reader = container.RangeReader(data)
     row["L0_read_bytes"] = reader.bytes_read()
     dec = codec.Decoder(reader, threads=2)
@@ -144,6 +146,15 @@ def prepare_one(args):
         half = export.develop(mos, h, half_size=True)    # one RGB pixel per 2x2 cell: no demosaic interpolation
         save_png(out / f"{name}-half.png", half)
         row[f"{name}-half_h"], row[f"{name}-half_w"] = half.shape[:2]
+    data2, _ = codec.encode(raw, step=1.0, effort=4, with_l3=False, keep_original=False, threads=2)   # format 2
+    r2 = container.RangeReader(data2)
+    row["v2_L0_read_bytes"] = r2.bytes_read()
+    idx_img = codec.Decoder(r2, threads=2).preview()
+    row["v2_L0IDX_read_bytes"] = r2.bytes_read()
+    row["IDX_bytes"] = container.layer_sizes(r2.header)["IDX"]
+    row["IDX_h"], row["IDX_w"] = idx_img.shape[:2]
+    row["v2_hot_bytes"] = len(data2)
+    save_png(out / "IDX.png", idx_img)
     small = export.resize(ref, row["L1-128_h"], row["L1-128_w"])
     save_png(out / "R-small.png", small)
     save_png(out / "R-plane.png", export.resize(ref, row["L1-128-half_h"], row["L1-128-half_w"]))
@@ -160,7 +171,7 @@ def prepare_one(args):
 
 
 ARMS = ["R", "R-small", "R-plane", "E", "L1-256", "L1-128", "L1-64", "L1-256-half", "L1-128-half", "L1-64-half",
-        "L1-spec"]
+        "L1-spec", "IDX"]
 
 
 def prepare(split, limit=None, workers=6):
@@ -266,7 +277,12 @@ def metrics(split):
         sel = np.flatnonzero(has_e)          # every arm is compared on images where every arm exists
         R = z["R"][sel]
         labels = df.loc[[keys[i] for i in sel]]
-        for arm in ARMS:
+        arms = [a for a in ARMS if a in z.files]
+        if "IDX" in arms:                     # the embedding as stored in the header: int8, scale 1/127
+            q = np.clip(np.rint(z["IDX"] * 127), -127, 127) / 127
+            z = {**{k: z[k] for k in z.files}, "IDX-int8": q / np.linalg.norm(q, axis=1, keepdims=True)}
+            arms.append("IDX-int8")
+        for arm in arms:
             X = z[arm][sel]
             row = {"model": name, "arm": arm, "n": len(sel)}
             cos = (X * R).sum(1)

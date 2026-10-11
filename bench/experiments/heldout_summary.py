@@ -17,7 +17,7 @@ def load(split, linear=True):
     df = pd.concat([pd.read_csv(f) for f in glob.glob(str(RESULTS / "per_image" / split / "*.csv"))])
     df = df[df.status == "ok"].copy()
     df["lossy_source"] = df.lossy_source.astype(str) == "True"
-    df["hot"] = df.L0_bytes + df.L1_bytes + df.L2_bytes
+    df["hot"] = df.L0_bytes + (df.IDX_bytes.fillna(0) if "IDX_bytes" in df else 0) + df.L1_bytes + df.L2_bytes
     df["total"] = df.hot + df.L3_bytes
     return df[~df.lossy_source] if linear else df
 

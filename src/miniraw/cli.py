@@ -32,6 +32,10 @@ def main(argv=None):
     e.add_argument("--no-l3", action="store_true")
     e.add_argument("--effort", type=int, default=4, help="JPEG XL effort 1-9 (default 4; 7 is ~2x slower, ~1.7%% smaller hot tier)")
     e.add_argument("--threads", type=int, help="worker threads (default: up to 8 cores)")
+    e.add_argument("--format-version", type=int, choices=[1, 2], default=2,
+                   help="2 (default): IDX thumbnail, no L1, rec 'alt'; 1: a file v1.0 readers decode exactly as before")
+    e.add_argument("--embed", nargs="?", const="ViT-B-32/laion2b_s34b_b79k", metavar="MODEL",
+                   help="store an int8 OpenCLIP embedding of the IDX thumbnail (needs the [index] extra)")
     e.add_argument("--no-original", action="store_true",
                    help="do not keep the original raw file's container (~0.4 MB hot) and previews "
                         "(~1-4 MB cold per 33 MP ARW): no restore to the original format")
@@ -83,7 +87,8 @@ def main(argv=None):
         raw = io_raw.read(a.src)
         data, _ = codec.encode(raw, step=a.step, with_l3=not a.no_l3, effort=a.effort,
                                threads=a.threads, source={"file": Path(a.src).name},
-                               keep_original=not a.no_original)
+                               keep_original=not a.no_original, format_version=a.format_version,
+                               embed=a.embed)
         Path(a.dst).write_bytes(data)
         _print_info(data)
     elif a.cmd == "decode":
@@ -158,6 +163,14 @@ def _decode(a):
     if mode == "preview":
         if region:
             sys.exit("--region is not supported with preview")
+        if ("IDX", 0, 0, 0) in reader.sections and ext in export.IMAGE_EXT:
+            rgb = dec.preview()                       # the stored index thumbnail, as is
+            export.save_image(a.dst, rgb, hd, a.quality)
+            print(f"wrote {a.dst} (preview from IDX, {rgb.shape[1]}x{rgb.shape[0]}) in "
+                  f"{time.perf_counter() - t0:.2f} s")
+            return
+        if not dec.layout.get("l1"):
+            sys.exit("this file's preview is an image (IDX); write it to .jpg, .png or .tif")
         mosaic, hd = dec.preview_mosaic()
     else:
         mosaic = dec.mosaic(mode, region, a.dither)
@@ -207,9 +220,15 @@ def _print_info(data):
     present = sum(sizes.values()) - (0 if r.flags & container.FLAG_L3 else sizes["L3"] + sizes["SRC"])
     sizes["L0"] = len(data) - present
     print(f"{s['width']}x{s['height']}  bit depth {s['bit_depth']}  step {hd['noise']['step']}  "
-          f"k {hd['layout']['k']}  tile {hd['layout']['tile']}  L3 {'present' if r.flags & 1 else 'stripped'}")
+          f"k {hd['layout']['k']}  tile {hd['layout']['tile']}  L3 {'present' if r.flags & 1 else 'stripped'}  "
+          f"format {r.version}")
     for k in ("L0", "L1", "L2", "L3"):
         print(f"  {k}: {sizes[k]:>10} B  {8 * sizes[k] / npx:6.3f} bpp")
+    if sizes.get("IDX"):
+        idx = hd.get("idx", {})
+        print(f"  IDX: {sizes['IDX']:>9} B  (index thumbnail {idx.get('width')}x{idx.get('height')})")
+    for e in hd.get("embed") or []:
+        print(f"  embedding: {e['model']} ({e['dim']} x {e['dtype']})")
     orig = hd["source"].get("original")
     if orig:
         state = ("restorable byte for byte" if r.has_original else

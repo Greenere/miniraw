@@ -77,6 +77,12 @@ That run is archived in `results/per_image/dev_specA/`. It used construction A, 
 
   P3, a single 4-channel image per tile, is used for MiniRaw, B2 and B5 alike. The report also keeps B2 under P1 (`B2_P1_bytes`). Effort stays at 7.
 - **D22. Smaller base layer: L1 shorter side of at least 128 px instead of 256.** With the spec's rule, G3 failed (1.048). Halving the L1 resolution gave 1.025 [1.014, 1.031] under P1 packing. Under P3 it gives 1.036 [1.013, 1.072], because packing helps q coded directly more than the L1 residual. L1 is then about 57 KB, with a shorter side still above a 224 px CLIP input for most sensors. Halving again (L1 near 64 to 128 px, 18 KB) gives 1.013. That passes G3, but it is probably too small for a good embedding, so it is left as a product decision. The setting is `l1_min_side`.
+- **D24. Cross-plane L2 prediction (format default since v1.0).** The spec codes each plane's q minus up(L1) independently. Instead, planes are coded in the order G1, G2, R, B, each as the residual from an integer prediction built from planes already decoded in the same tile (`layers.cross_predict`):
+  - G1 from up(L1).
+  - G2 from the mean of its neighbouring G1 samples plus the low-pass G2-G1 difference from L1.
+  - R and B from the mean of neighbouring G1 and G2 samples plus the low-pass colour difference from L1.
+
+  All arithmetic is integer with rounding offsets, identical in encoder and decoder. Measured in real JPEG XL bytes on the Sony A7 IV set (`bench/experiments/cross_plane.py`), L2 is 5.7-8.9% smaller at effort 7 and 4.5-5.1% smaller at effort 4. Exact decode and byte-identical ARW restore were re-verified. With cross-plane prediction, four separate grayscale images (P1) beat the 4-channel packing (P3) of D21, so `packing = "P1"`; the baselines keep P3. Later measurements (`bench/experiments/l1_index.py`, D29) showed the gain comes from the neighbour terms: the L1 terms make L2 0.8-3.6% larger.
 - **Measured, not adopted: a context-modelled L3** (`bench/experiments/l3_context.py`). The context is where the 3x3 mean of signal-mode neighbours falls relative to the pixel's bin. It lowers the ideal L3 cost by a median 0.050 bpp (0.22 bpp on the noise-reduced Leica D-LUX 3), about half of G1's overhead, before the cost of storing tables. That is under 1% of the file and touches only the cold tier, so it is deferred.
 
 ## Speed (encode/decode are byte-identical to the earlier code)
@@ -99,5 +105,12 @@ That run is archived in `results/per_image/dev_specA/`. It used construction A, 
   - L1 is built with a reshape-sum and upsampled separably. Both are bit-identical to the earlier code.
   - The codec and CLI default to JPEG XL effort 4. That gives a 1.7% larger hot tier at half the encode time; the effort curve is in `bench/experiments`. The benchmark config keeps effort 7 for both MiniRaw and the baselines.
 
+- **D25. Production-path efficiency, with identical output.** A review of the implementation (`docs/v1_algo_improvements_guidance_by_chatGPT.md`, response in `docs/v1_suggestions_evaluation.md`) found that every decode read the whole file. The contract for every change was **identical decoded values and identical encoded bytes**, verified on 42 of 42 checks.
+  - Reads are selective and positional: a crop of a 28.2 MB file reads 1.4 MB, a header 0.02 MB. Tiles are selected directly.
+  - The source file is read once, and the unused preview repack is skipped (76 to 38 MB read), with exact-reproduction verification kept.
+  - Arrays are compact: q is uint16, there is no padded L1 copy, mosaics are written directly, and stripping hashes as it goes. Peak memory is 13-36% lower.
+  - A partition instead of a sort in the noise estimator was **rejected**: tie-breaking changes the encoded bytes, for about 3% of encode time.
+  - The CRC is computed once; a streaming writer is deferred.
+  - `bench/experiments/prod_paths.py` measures wall time, peak memory and bytes read per production path, in a fresh process each.
 
 - **D16. Platform.** macOS arm64 (Apple M1) with Python 3.14, not Linux with Python 3.11. libjxl 0.12.0 via imagecodecs, used for both MiniRaw and the baselines.

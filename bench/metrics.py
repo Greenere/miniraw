@@ -10,13 +10,15 @@ def bpp(nbytes, npx):
     return 8.0 * nbytes / npx
 
 
-def bound_violations(x, T, fwd, rec, step, checker=False):
+def bound_violations(x, T, fwd, rec, step, checker=False, rec_hi=None):
     """Pixels violating |T(x) - T(rec[q(x)])| <= step/2 + 1 DN slack (every pixel checked).
 
     With checker=True, also checks rec + 1 for even-sized bins, which checker
     mode emits on half the pixels.
     """
     excess = vst.bound_check(T, fwd, rec, step)
+    if rec_hi is not None:      # rec "csafe": some pixels decode to rec_hi; both must hold
+        excess = np.maximum(excess, vst.bound_check(T, fwd, rec_hi, step))
     if checker:
         lo = vst.lo_from_forward(fwd)
         n, _ = vst.tables_from_lo(lo, len(fwd) - 1)

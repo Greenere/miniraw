@@ -1,7 +1,7 @@
 .venv/
 __pycache__/
 *.egg-info/
-data/
+/data/
 results/cache/
 .pytest_cache/
 *.mraw
@@ -9,3 +9,4 @@ results/cache/
 .DS_Store
 dist/
 build/
+!tests/data/*.mraw

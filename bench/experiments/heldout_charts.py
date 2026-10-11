@@ -24,7 +24,7 @@ B5_BITS = (11, 10, 9, 8, 7)   # every linear image has these; 12-bit only exists
 def load(split):
     df = pd.concat([pd.read_csv(f) for f in glob.glob(str(ROOT / "results" / "per_image" / split / "*.csv"))])
     df = df[df["lossy_source"].astype(str) == "False"].copy()
-    df["hot"] = df.L0_bytes + df.L1_bytes + df.L2_bytes
+    df["hot"] = df.L0_bytes + (df.IDX_bytes.fillna(0) if "IDX_bytes" in df else 0) + df.L1_bytes + df.L2_bytes
     df["total"] = df.hot + df.L3_bytes
     return df
 

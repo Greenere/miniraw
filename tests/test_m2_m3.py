@@ -11,7 +11,8 @@ from miniraw import codec, container, io_raw
                                         ("wavelet", "PG", "l1")])
 def encoded(synth_image, request):
     l1_mode, packing, l2_pred = request.param
-    return codec.encode(synth_image, tile=256, effort=3, l1_mode=l1_mode, packing=packing, l2_pred=l2_pred)
+    return codec.encode(synth_image, tile=256, effort=3, l1_mode=l1_mode, packing=packing, l2_pred=l2_pred,
+                        use_l1=True)          # these test the L1 constructions; format 2 has no L1 by default
 
 
 @pytest.mark.parametrize("use_l1", [True, False])

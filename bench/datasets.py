@@ -64,10 +64,38 @@ def make_splits(n_dev=20, n_test=60, n_holdout=60, seed=0):
     return dev, test, holdout
 
 
-def make_index_split(n=500, seed=1):
+def _used(exclude=None):
+    names = exclude or [f.stem for f in SPLITS.glob("*.txt")]
+    return set().union(*(set(read_split(n)) for n in names))
+
+
+def make_holdout_split(name, n=60, seed=0):
+    """A fresh held-out split: the dev cameras' round-robin, skipping every image in an existing split."""
+    meta = load_meta()
+    used = _used()
+    by_cam = defaultdict(list)
+    for k in sorted(meta):
+        cam = meta[k]["camera"]
+        by_cam[f"{cam['make']} {cam['model']}"].append(k)
+    rng = random.Random(seed)
+    cams = sorted(by_cam, key=lambda c: (-len(by_cam[c]), c))
+    for c in cams:
+        rng.shuffle(by_cam[c])            # same order as make_splits
+    pools = {c: [k for k in by_cam[c] if k not in used] for c in cams[:20]}
+    out, i = [], 0
+    while len(out) < n and any(i < len(v) for v in pools.values()):
+        for c in cams[:20]:
+            if i < len(pools[c]) and len(out) < n:
+                out.append(pools[c][i])
+        i += 1
+    (SPLITS / f"{name}.txt").write_text("\n".join(out) + "\n")
+    return out
+
+
+def make_index_split(n=500, seed=1, name="index500"):
     """index500: images in no other split, stratified by FiveK subject in proportion (index benchmark)."""
     meta = load_meta()
-    used = set(read_split("dev")) | set(read_split("test")) | set(read_split("holdout"))
+    used = _used(["dev", "test", "holdout"]) if name == "index500" else _used()
     by_subj = defaultdict(list)
     for k in sorted(meta):
         if k not in used:
@@ -83,7 +111,7 @@ def make_index_split(n=500, seed=1):
         rest += [(-len(keys), i, k) for i, k in enumerate(keys[m:])]
     picked += [k for _, _, k in sorted(rest)[: max(n - len(picked), 0)]]   # rounding: top up from the largest
     picked = sorted(picked)[:n]
-    (SPLITS / "index500.txt").write_text("\n".join(picked) + "\n")
+    (SPLITS / f"{name}.txt").write_text("\n".join(picked) + "\n")
     return picked
 
 
@@ -121,11 +149,15 @@ def camera_of(key):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout", "index500"])
+    ap.add_argument("--split", default="dev")
     ap.add_argument("--make-splits", action="store_true")
     a = ap.parse_args()
     if a.make_splits or not (SPLITS / "dev.txt").exists():
         make_splits()
     if a.split == "index500" and not (SPLITS / "index500.txt").exists():
         make_index_split()
+    if a.split == "index500b" and not (SPLITS / "index500b.txt").exists():
+        make_index_split(seed=2, name="index500b")
+    if a.split == "holdout2" and not (SPLITS / "holdout2.txt").exists():
+        make_holdout_split("holdout2")
     download(read_split(a.split))

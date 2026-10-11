@@ -1,6 +1,7 @@
 """.mraw container: 16-byte preamble, zstd-MessagePack header, sections (spec 5).
 
-Section order on disk is L1, L2, CTR, L3, SRC. Truncating at the first L3 byte
+Section order on disk is IDX, L1, L2, CTR, L3, SRC. IDX (format version 2) is a small index
+thumbnail placed first, so the header and IDX come back in one short read. Truncating at the first L3 byte
 drops the cold layers: L3 (exact sensor data) and SRC (large embedded previews of
 the original raw file). CTR, the original file's container, stays hot so a valid
 file in the original format can still be written around near-lossless pixels.
@@ -15,16 +16,18 @@ import msgpack
 import zstandard
 
 MAGIC = b"MRAW"
-VERSION = 1
+VERSION = 2             # 1: v1.0 files; 2: adds IDX, the stored embedding and rec "csafe" (D29, D30)
 FLAG_L3 = 1
 PREAMBLE = struct.Struct("<4sHHII")
 FIRST_READ = 16 * 1024
-LAYER_ORDER = {"L1": 1, "L2": 2, "CTR": 3, "L3": 4, "SRC": 5}
+LAYER_ORDER = {"IDX": 0, "L1": 1, "L2": 2, "CTR": 3, "L3": 4, "SRC": 5}
 COLD = ("L3", "SRC")
 
 
-def write(header, sections):
+def write(header, sections, version=VERSION):
     """sections: list of ((layer, plane, ty, tx), payload bytes). Returns file bytes."""
+    if not 1 <= version <= VERSION:
+        raise ValueError(f"format version {version} not supported (1..{VERSION})")
     sections = sorted(sections, key=lambda s: (LAYER_ORDER[s[0][0]], s[0][1:]))
     has_l3 = any(s[0][0] == "L3" for s in sections)
     crcs = [zlib.crc32(data) for _, data in sections]
@@ -42,7 +45,7 @@ def write(header, sections):
         reserve = len(hb) + 64
     else:
         raise RuntimeError("header size did not converge")
-    pre = PREAMBLE.pack(MAGIC, VERSION, FLAG_L3 if has_l3 else 0, len(hb), zlib.crc32(hb))
+    pre = PREAMBLE.pack(MAGIC, version, FLAG_L3 if has_l3 else 0, len(hb), zlib.crc32(hb))
     return b"".join([pre, hb, b"\0" * (reserve - len(hb))] + [d for _, d in sections])
 
 
@@ -137,6 +140,9 @@ class RangeReader:
         magic, ver, self.flags, hlen, crc = PREAMBLE.unpack_from(head)
         if magic != MAGIC:
             raise ValueError("not a .mraw file")
+        if ver > VERSION:
+            raise ValueError(f"written by a newer MiniRaw (format version {ver}); this reader supports up to {VERSION}")
+        self.version = ver
         if PREAMBLE.size + hlen > len(head):
             head = head + self.read(len(head), PREAMBLE.size + hlen - len(head))
         hb = head[PREAMBLE.size:PREAMBLE.size + hlen]
@@ -180,7 +186,7 @@ class RangeReader:
 
 
 def layer_sizes(header):
-    out = {"L1": 0, "L2": 0, "CTR": 0, "L3": 0, "SRC": 0}
+    out = {"IDX": 0, "L1": 0, "L2": 0, "CTR": 0, "L3": 0, "SRC": 0}
     for layer, _, _, _, _, length, _ in header["sections"]:
         out[layer] += length
     return out

@@ -64,7 +64,7 @@ def default_threads():
     return min(8, os.cpu_count() or 1)
 
 
-def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics):
+def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics, rec="floor"):
     """Noise model, tables, q and L1 for one plane (runs in a worker thread)."""
     x = raw.planes[p]
     b, white = raw.black[p], raw.white
@@ -83,6 +83,8 @@ def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnos
     pinfo.update(T=T, fwd=fwd, q=q, nq=len(lo))
     st = {"x": x, "q": q, "lo": lo, "n": n, "info": pinfo, "l1": None, "coeffs": None,
           "hdr": {"xmax": xmax, "lo": deltas.astype("<u2").tobytes(), "model": model}}
+    if rec == "csafe":
+        st["hdr"]["rec_bits"] = np.packbits(vst.ceil_allowed_bits(T, fwd, step)).tobytes()
     if use_l1 and l1_mode == "mean":
         st["l1"] = layers.l1_from_q(q, k)
     elif use_l1:
@@ -96,10 +98,10 @@ def _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnos
     return st
 
 
-def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
-           with_l3=True, models=None, source=None, l1_mode="mean", rec="floor", k=None,
+def encode(raw, step=1.0, tile=512, effort=4, use_l1=None, upsampler="bilinear",
+           with_l3=True, models=None, source=None, l1_mode="mean", rec=None, k=None,
            packing=None, l1_min_side=128, threads=None, diagnostics=False, keep_original=False,
-           l2_pred="cross", l1_step=1, g1_pred="l1"):
+           l2_pred="cross", l1_step=1, g1_pred="l1", format_version=container.VERSION, idx=None, embed=None):
     """Encode a RawImage. `models` (per-plane noise model dicts) skips estimation.
 
     l1_mode "mean" is construction A (floor-mean L1, L2 codes q - up(L1));
@@ -110,16 +112,33 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     tile plus L1 (layers.cross_predict); "l1" codes q - up(L1) for every plane (the earlier format).
     l1_min_side sets k: the largest power of two keeping L1's shorter side >= it.
     rec selects the signal-mode reconstruction: "floor" is spec 4.3's lo + (n-1)//2;
-    "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17).
+    "checker" alternates floor/ceil of the bin centre on a pixel checkerboard (deviation D17);
+    "csafe" does so only in bins where the ceiling stays within the bound (D30; format 2).
     threads: worker threads for planes and tiles (output is identical for any value).
     diagnostics: also re-validate isotonic fallbacks (benchmark reporting only).
     keep_original: also store the source raw file's container (hot CTR section) and its large
     previews (cold SRC, only with L3). With L3 the original file restores byte for byte; without
     it a valid file in the same format is written around the near-lossless pixels (source.py).
 
+    format_version 2 (default) changes three defaults (D29, D30): no L1 (L2 never benefited from it), an IDX
+    index thumbnail, and rec "csafe" (a checkerboard of floor and ceiling in even bins where the ceiling keeps the
+    error bound; floor elsewhere). format_version 1 writes v1.0 files: L1 at l1_min_side, rec "floor", no IDX.
+    Explicit use_l1, rec and idx override either. embed: an OpenCLIP model id ("ViT-B-32/laion2b_s34b_b79k") to
+    store an int8 embedding of IDX in the header (needs the [index] extra).
+
     Returns (file bytes, info dict). info holds per-plane T tables and q planes
     for the benchmark's metrics; they are not part of the file.
     """
+    if format_version not in (1, 2):
+        raise ValueError(f"format_version must be 1 or 2, not {format_version}")
+    v2 = format_version >= 2
+    use_l1 = (not v2) if use_l1 is None else use_l1
+    rec = ("csafe" if v2 else "floor") if rec is None else rec
+    idx = v2 if idx is None else idx
+    if (idx or rec == "csafe") and not v2:
+        raise ValueError("IDX and rec 'csafe' need format_version 2")
+    if embed and not idx:
+        raise ValueError("an embedding is computed from IDX; it needs idx=True")
     planes = raw.planes
     pshape = planes.shape[1:]
     if l2_pred == "cross" and use_l1 and l1_mode != "mean":
@@ -132,8 +151,8 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
     groups = layers.PACKINGS[packing]
     grid = layers.tile_grid(pshape, tile)
     with ThreadPoolExecutor(threads or default_threads()) as ex:
-        st = list(ex.map(lambda p: _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics),
-                         range(4)))
+        st = list(ex.map(lambda p: _plane_state(raw, p, step, models, use_l1, l1_mode, k, levels, grid, diagnostics,
+                                                rec), range(4)))
         if use_l1 and l1_mode == "mean" and l1_step > 1:     # store L1 coarser; predict from what is stored
             for s in st:
                 s["l1_stored"] = s["l1"] // l1_step
@@ -199,7 +218,8 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
         "source": {**(source or {}), "exif": raw.exif, "sha256": mosaic_sha256(planes, raw.offsets),
                    **({"original": original} if original else {})},
         "noise": {"step": step, "planes": [s["hdr"]["model"] for s in st]},
-        "tables": [{"xmax": s["hdr"]["xmax"], "lo": s["hdr"]["lo"]} for s in st],
+        "tables": [{"xmax": s["hdr"]["xmax"], "lo": s["hdr"]["lo"],
+                    **({"rec_bits": s["hdr"]["rec_bits"]} if "rec_bits" in s["hdr"] else {})} for s in st],
         "layout": {"tile": tile, "k": k, "upsampler": upsampler, "packing": packing,
                    "plane_shape": list(pshape), "l1": use_l1,
                    "l1_mode": l1_mode, "rec": rec, "l2_pred": l2_pred,
@@ -207,7 +227,15 @@ def encode(raw, step=1.0, tile=512, effort=4, use_l1=True, upsampler="bilinear",
         "stats": stats_mod.technical(raw, [s["hdr"]["model"] for s in st]),
         "embed": None,
     }
-    return container.write(header, sections), {"planes": [s["info"] for s in st]}
+    if idx:
+        from . import index as index_mod
+        thumb = index_mod.thumbnail(raw, header)
+        sections.append((("IDX", 0, 0, 0), index_mod.encode_thumbnail(thumb)))
+        header["idx"] = {"codec": "jxl", "height": int(thumb.shape[0]), "width": int(thumb.shape[1]),
+                         "oriented": True}
+        if embed:
+            header["embed"] = [index_mod.embed(thumb, embed)]
+    return container.write(header, sections, format_version), {"planes": [s["info"] for s in st]}
 
 
 class Decoder:
@@ -219,9 +247,14 @@ class Decoder:
         self.pshape = tuple(self.layout["plane_shape"])
         self.offsets = [tuple(o) for o in hd["sensor"]["cfa"]]
         self.tables = []
+        mode = self.layout.get("rec")
+        self.rec_floor, self.rec_bits = [], []
         for t in hd["tables"]:
             lo = vst.decode_lo(np.frombuffer(t["lo"], "<u2"))
             n, rec = vst.tables_from_lo(lo, t["xmax"])
+            self.rec_floor.append(rec)
+            self.rec_bits.append(np.unpackbits(np.frombuffer(t["rec_bits"], np.uint8))[:len(lo)].astype(np.int64)
+                                 if mode == "csafe" else None)
             self.tables.append((lo, n, rec))
         self._l1 = {}
         self.groups = layers.PACKINGS[self.layout.get("packing", "P1")]
@@ -295,7 +328,12 @@ class Decoder:
                     x = lo[q] + rng.integers(0, n[q])
                 elif rec_mode == "checker":
                     parity = (np.arange(ty0, ty0 + th)[:, None] + np.arange(tx0, tx0 + tw)[None, :]) & 1
-                    x = rec_t[q] + ((n[q] - 1) & 1) * parity
+                    x = self.rec_floor[p][q] + ((n[q] - 1) & 1) * parity
+                elif rec_mode == "csafe":   # D30: checkerboard only in bins where the ceiling keeps the bound
+                    parity = (np.arange(ty0, ty0 + th)[:, None] + np.arange(tx0, tx0 + tw)[None, :]) & 1
+                    x = self.rec_floor[p][q] + self.rec_bits[p][q] * parity
+                elif rec_mode == "floor":
+                    x = self.rec_floor[p][q]
                 else:
                     x = rec_t[q]
                 out[p][sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = x[sy0 - ty0:sy1 - ty0, sx0 - tx0:sx1 - tx0]
@@ -358,7 +396,13 @@ class Decoder:
         return io_raw.unpack(planes, self.offsets), hd
 
     def preview(self):
-        """8-bit RGB thumbnail from L0 + L1 only (float allowed: not an exact path)."""
+        """8-bit RGB thumbnail: IDX when present (format 2, display orientation), else from L0 + L1
+        (sensor orientation; float allowed: not an exact path)."""
+        if ("IDX", 0, 0, 0) in self.r.sections:
+            from . import index as index_mod
+            return index_mod.decode_thumbnail(self.r.section("IDX", 0))
+        if not self.layout.get("l1"):
+            raise ValueError("this file has no preview source (neither IDX nor L1)")
         hd = self.r.header["sensor"]
         ch = []
         for p in range(4):

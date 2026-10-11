@@ -39,8 +39,9 @@ def test_header_and_preview_reads_are_small(mraw_file):
     r = container.RangeReader(p)
     assert r.bytes_read() == container.FIRST_READ            # header only
     codec.Decoder(r).preview()
-    l1 = sum(v[1] for k, v in r.sections.items() if k[0] == "L1")
-    assert r.bytes_read() == container.FIRST_READ + l1        # + L1, nothing else
+    source = "IDX" if ("IDX", 0, 0, 0) in r.sections else "L1"      # format 2: IDX; format 1: L1
+    extra = sum(v[1] for k, v in r.sections.items() if k[0] == source)
+    assert r.bytes_read() == container.FIRST_READ + extra     # + the preview source, nothing else
     assert r.bytes_read() < len(data) / 3
 
 

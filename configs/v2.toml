@@ -1,0 +1,19 @@
+# MiniRaw format version 2 benchmark configuration (D29, D30): no L1, IDX thumbnail, rec "csafe".
+# Everything else is phase1.toml's.
+step = 1.0
+steps = [0.5, 1.0, 1.5, 2.0]
+tile = 512
+effort = 7               # effort 9: -0.9% L2 at 4.9x encode time (bench/experiments/packing.py)
+l2_pred = "cross"        # cross-plane L2 prediction; -5.7 to -8.9% L2 on the A7 IV set (D24)
+packing = "P1"           # MiniRaw: per-plane images suit cross-plane residuals (P3 was best before D24)
+b2_packing = "P3"        # JPEG XL baselines keep their best packing: one 4-channel image per tile (D21)
+l1_min_side = 128        # L1 shorter side >= 128 px (spec: 256); G3 1.048 -> 1.025 on dev (D22)
+l1_mode = "mean"         # "mean" = construction A, "wavelet" = construction B; A chosen on dev (D18)
+upsampler = "bilinear"   # construction A only
+rec = "csafe"            # checkerboard only where the ceiling keeps the bound (D30)
+b5_bits = [12, 11, 10, 9, 8, 7]
+b2_effort9 = false
+workers = 4
+format_version = 2
+use_l1 = false
+idx = true

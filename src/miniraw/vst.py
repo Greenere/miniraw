@@ -81,6 +81,21 @@ def decode_lo(deltas):
     return np.concatenate([[0], np.cumsum(np.asarray(deltas, np.int64))])
 
 
+def ceil_allowed_bits(T, fwd, step):
+    """Per-bin flags for rec "csafe": 1 for even-sized bins whose ceiling (rec + 1) keeps every value in the bin
+    within the error bound. Those bins alternate floor and ceiling on a pixel checkerboard, which cancels the
+    floor offset inside each bin; all other bins use the floor (D30)."""
+    lo = lo_from_forward(fwd)
+    n, rec = tables_from_lo(lo, len(fwd) - 1)
+    slope = np.abs(np.diff(T))
+    one_dn = np.maximum(np.concatenate([slope, [slope[-1]]]), np.concatenate([[slope[0]], slope]))
+    q = fwd.astype(np.int64)
+    ceil = rec[q] + 1
+    ok_dn = np.abs(T - T[np.minimum(ceil, len(T) - 1)]) <= step / 2 + one_dn + 1e-9
+    bad = np.bincount(q, weights=~ok_dn, minlength=len(lo)) > 0
+    return ((n % 2 == 0) & ~bad).astype(np.uint8)
+
+
 def bound_check(T, fwd, rec, step):
     """Per-DN check of |T(x) - T(rec[q(x)])| <= step/2 + one DN of slack.
 

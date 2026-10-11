@@ -44,7 +44,8 @@ def _signal_quality(raw, data, info, step, prefix):
         pi = info["planes"][p]
         T, fwd = pi["T"], pi["fwd"]
         rec = dec.tables[p][2]
-        viol += metrics.bound_violations(raw.planes[p], T, fwd, rec, step, checker)
+        hi = dec.rec_floor[p] + dec.rec_bits[p] if dec.layout.get("rec") == "csafe" else None
+        viol += metrics.bound_violations(raw.planes[p], T, fwd, rec, step, checker, rec_hi=hi)
         viol_alt += metrics.bound_violations(raw.planes[p], T, fwd, rec, step, not checker)
         r, m = metrics.stabilized_errors(raw.planes[p], sig[p], T)
         rmse_sq += r * r / 4
@@ -92,7 +93,9 @@ def run_image(key, cfg, split, path=None, quick=False):
     # --- MiniRaw default configuration
     te = time.time()
     enc = dict(tile=T, effort=E, upsampler=cfg["upsampler"], l1_mode=cfg["l1_mode"], rec=cfg["rec"],
-               packing=cfg["packing"], l1_min_side=cfg["l1_min_side"], l2_pred=cfg.get("l2_pred", "l1"))
+               packing=cfg["packing"], l1_min_side=cfg["l1_min_side"], l2_pred=cfg.get("l2_pred", "l1"),
+               format_version=cfg.get("format_version", 1), use_l1=cfg.get("use_l1", True),
+               idx=cfg.get("idx", False))
     b2p = cfg.get("b2_packing", cfg["packing"])
     data, info = codec.encode(raw, step=step, source={"file": path.name, "camera": row["camera"]},
                               diagnostics=True, **enc)
@@ -150,12 +153,18 @@ def run_image(key, cfg, split, path=None, quick=False):
     row.update(q)
 
     # --- Variants for G3 (no L1), G4 (untiled), upsampler choice
-    d_nol1, _ = codec.encode(raw, step=step, tile=T, effort=E, use_l1=False, with_l3=False, models=models)
-    row["L2_direct_bytes"] = _sizes(d_nol1)["L2"]
+    use_l1 = enc["use_l1"]
+    if use_l1:
+        d_nol1, _ = codec.encode(raw, step=step, tile=T, effort=E, use_l1=False, with_l3=False, models=models,
+                                 format_version=1)
+        row["L2_direct_bytes"] = _sizes(d_nol1)["L2"]
+    else:                                   # format 2 has no L1: L2 is already coded directly
+        row["L2_direct_bytes"] = row["L2_bytes"]
     d_untiled, _ = codec.encode(raw, step=step, with_l3=False, models=models, **{**enc, "tile": None})
     s = _sizes(d_untiled)
     row["L1L2_untiled_bytes"] = s["L1"] + s["L2"]
-    variants = [("mean", "bilinear")] if quick else [("mean", "bilinear"), ("mean", "nearest"), ("wavelet", "bilinear")]
+    variants = [] if not use_l1 else [("mean", "bilinear")] if quick else \
+        [("mean", "bilinear"), ("mean", "nearest"), ("wavelet", "bilinear")]
     for mode, ups in variants:
         dv, _ = codec.encode(raw, step=step, with_l3=False, models=models,
                              **{**enc, "l1_mode": mode, "upsampler": ups})
@@ -163,9 +172,9 @@ def run_image(key, cfg, split, path=None, quick=False):
         row[f"L1L2_{mode}_{ups}_bytes"] = s["L1"] + s["L2"]
     # G3 versus base-layer size: construction A with k doubled and quadrupled
     from miniraw import layers as _layers
-    k0 = _layers.choose_k(raw.planes.shape[1:], cfg["l1_min_side"])
+    k0 = _layers.choose_k(raw.planes.shape[1:], cfg["l1_min_side"]) if use_l1 else 0
     row["k"] = k0
-    for mult in (() if quick else (2, 4)):
+    for mult in (() if quick or not use_l1 else (2, 4)):
         dv, _ = codec.encode(raw, step=step, with_l3=False, models=models,
                              **{**enc, "l1_mode": "mean", "k": k0 * mult})
         s = _sizes(dv)
@@ -194,7 +203,7 @@ def run_image(key, cfg, split, path=None, quick=False):
             continue
         ds, inf = codec.encode(raw, step=st, with_l3=False, models=models, **enc)
         s = _sizes(ds)
-        row[f"step{st}_L0L1L2_bytes"] = s["L0"] + s["L1"] + s["L2"]
+        row[f"step{st}_L0L1L2_bytes"] = s["L0"] + s["IDX"] + s["L1"] + s["L2"]    # the whole hot tier
         qq, _ = _signal_quality(raw, ds, inf, st, f"step{st}_")
         row.update(qq)
 
@@ -204,9 +213,9 @@ def run_image(key, cfg, split, path=None, quick=False):
     return key, f"{row['total_s']:.0f}s"
 
 
-def run_synth(cfg, split, n_images=3):
+def run_synth(cfg, split, n_images=3, name=None):
     """Estimator accuracy and ground-truth fidelity on synthetic Poisson-Gaussian planes."""
-    out = RESULTS / "per_image" / f"synth_{split}.csv"
+    out = RESULTS / "per_image" / f"synth_{name or split}.csv"
     if out.exists():
         return
     rows = []
@@ -220,7 +229,9 @@ def run_synth(cfg, split, n_images=3):
             img = io_raw.RawImage(x1, raw.offsets, [synth.B] * 4, synth.WHITE, 14)
             data, info = codec.encode(img, step=cfg["step"], tile=cfg["tile"], effort=cfg["effort"],
                                       l1_mode=cfg["l1_mode"], rec=cfg["rec"], packing=cfg["packing"],
-                                      l1_min_side=cfg["l1_min_side"], l2_pred=cfg.get("l2_pred", "l1"))
+                                      l1_min_side=cfg["l1_min_side"], l2_pred=cfg.get("l2_pred", "l1"),
+                                      format_version=cfg.get("format_version", 1), use_l1=cfg.get("use_l1", True),
+                                      idx=cfg.get("idx", False))
             dec = codec.Decoder(container.RangeReader(data)).planes("signal")
             true = {"type": "affine", "a": a, "b": float(synth.B), "c": c}
             Tt = vst.T_table(true, synth.WHITE)
@@ -271,26 +282,27 @@ def _worker(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(ROOT / "configs" / "phase1.toml"))
-    ap.add_argument("--split", default="dev", choices=["dev", "test", "holdout"])
+    ap.add_argument("--split", default="dev")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--no-synth", action="store_true")
     ap.add_argument("--dir", help="benchmark every raw file in this folder (results under its name)")
     ap.add_argument("--quick", action="store_true", help="skip design-choice variants (L1 constructions, k sweep)")
     ap.add_argument("--workers", type=int)
+    ap.add_argument("--name", help="results directory name under results/per_image (default: the split or folder name)")
     a = ap.parse_args()
     cfg = tomllib.loads(Path(a.config).read_text())
     if a.dir:
         files = sorted(p for p in Path(a.dir).iterdir() if p.suffix.lower() in RAW_EXT)[: a.limit]
-        split = Path(a.dir).name
+        split = a.name or Path(a.dir).name
         jobs = [(p.stem, cfg, split, str(p), a.quick) for p in files]
     else:
-        split = a.split
-        jobs = [(k, cfg, split, None, a.quick) for k in read_split(split)[: a.limit]]
+        split = a.name or a.split
+        jobs = [(k, cfg, split, None, a.quick) for k in read_split(a.split)[: a.limit]]
     with Pool(a.workers or cfg.get("workers", 4)) as pool:
         for key, status in pool.imap_unordered(_worker, jobs):
             print(f"{key}: {status}", flush=True)
     if not a.no_synth and not a.dir and a.split == "dev":
-        run_synth(cfg, a.split)
+        run_synth(cfg, a.split, name=split)
 
 
 if __name__ == "__main__":

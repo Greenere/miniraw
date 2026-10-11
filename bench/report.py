@@ -46,7 +46,7 @@ def matched_b5(row, steps, metric="stab_rmse"):
     pts = []
     for st in steps:
         if st == 1.0:
-            b, r = row["L0_bytes"] + row["L1_bytes"] + row["L2_bytes"], row[metric]
+            b, r = row["L0_bytes"] + row.get("IDX_bytes", 0) + row["L1_bytes"] + row["L2_bytes"], row[metric]
         else:
             b, r = row.get(f"step{st}_L0L1L2_bytes"), row.get(f"step{st}_{metric}")
         if pd.notna(b) and pd.notna(r):
@@ -95,7 +95,9 @@ def main():
     for c in ["lossy_source", "exact_ok", "region_exact_ok", "region_reads_ok", "crop1024_reads_ok",
               "strip_signal_ok", "sidecar_exact_ok"]:
         df[c] = df[c].astype(str) == "True"
-    df["hot"] = df.L0_bytes + df.L1_bytes + df.L2_bytes
+    df["IDX_bytes"] = df["IDX_bytes"].fillna(0) if "IDX_bytes" in df else 0
+    df["hot"] = df.L0_bytes + df.IDX_bytes + df.L1_bytes + df.L2_bytes        # IDX is hot overhead too (format 2)
+    has_l1 = bool((df.L1_bytes > 0).any())
     df["r_G1"] = (df.L1_bytes + df.L2_bytes + df.L3_bytes) / df.B2_bytes
     df["r_G2"] = df.hot / df.B2_bytes
     df["r_G3"] = (df.L1_bytes + df.L2_bytes) / df.L2_direct_bytes
@@ -129,13 +131,16 @@ def main():
     L.append("| Gate | Measure | Median | 95% CI | Threshold | Verdict |\n|---|---|---|---|---|---|")
     rows = [
         ("G1", "(L1+L2+L3) / B2", clean.r_G1, 1.03, True),
-        ("G2", "(L0+L1+L2) / B2", clean.r_G2, 0.50, True),
-        ("G3", "(L1+L2) / L2 direct", clean.r_G3, 1.03, True),
+        ("G2", "hot tier (L0+IDX+L1+L2) / B2", clean.r_G2, 0.50, True),
+        *([("G3", "(L1+L2) / L2 direct", clean.r_G3, 1.03, True)] if has_l1 else []),
         ("G4", "tiling overhead (tiled/untiled - 1)", clean.r_G4, 0.05, True),
     ]
     for g, name, v, thr, le in rows:
         m, lo, hi = boot_median_ci(v)
         L.append(f"| {g} | {name} | {m:.3f} | [{lo:.3f}, {hi:.3f}] | {'<=' if le else '>='} {thr} | {verdict(m, lo, hi, thr, le)} |")
+    if not has_l1:
+        L.append(f"| G3 | no L1 in format 2 (D29); index thumbnail IDX median {np.median(clean.IDX_bytes) / 1e3:.0f} KB "
+                 f"instead | — | — | — | n/a |")
     L.append("")
     L.append("**Non-size conditions**\n")
     syn_gt = boot_median_ci(syn.drop_duplicates(["key", "a", "c"]).gt_ratio) if syn is not None else (np.nan,) * 3
@@ -239,14 +244,18 @@ def main():
     L.append("")
 
     L.append("## 6. Other measurements\n")
-    L.append("- G3 by L1 construction, (L1+L2)/L2 direct, linear sources (dev choice of construction and upsampler):")
+    if not has_l1:
+        g3_variants = []
+    else:
+        L.append("- G3 by L1 construction, (L1+L2)/L2 direct, linear sources (dev choice of construction and upsampler):")
     for v in g3_variants:
         m, lo, hi = boot_median_ci(clean[f"r_G3_{v}"])
         L.append(f"    - {v.replace('_bilinear', '').replace('_nearest', '').replace('mean', 'A (floor-mean)').replace('wavelet', 'B (5/3 wavelet)')}"
                  f"{', nearest upsampler' if 'nearest' in v else ''}: median {m:.3f} [{lo:.3f}, {hi:.3f}]")
-    L.append("- G3 against base-layer size (construction A, bilinear; k from l1_min_side = %s):"
-             % "/".join(str(int(x)) for x in sorted(clean.k.unique())))
-    for mult in [m for m in (1, 2, 4) if m == 1 or f"L1L2_mean_k{m}x_bytes" in clean]:
+    if has_l1:
+        L.append("- G3 against base-layer size (construction A, bilinear; k from l1_min_side = %s):"
+                 % "/".join(str(int(x)) for x in sorted(clean.k.unique())))
+    for mult in [m for m in (1, 2, 4) if has_l1 and (m == 1 or f"L1L2_mean_k{m}x_bytes" in clean)]:
         if mult == 1:
             r3, l1 = clean.r_G3_mean_bilinear, clean.L1_bytes
         else:
