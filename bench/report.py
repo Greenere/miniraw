@@ -97,7 +97,8 @@ def main():
     df["r_G2"] = df.hot / df.B2_bytes
     df["r_G3"] = (df.L1_bytes + df.L2_bytes) / df.L2_direct_bytes
     df["r_G4"] = (df.L1_bytes + df.L2_bytes) / df.L1L2_untiled_bytes - 1
-    for v in ["mean_bilinear", "mean_nearest", "wavelet_bilinear"]:
+    g3_variants = [v for v in ["mean_bilinear", "mean_nearest", "wavelet_bilinear"] if f"L1L2_{v}_bytes" in df]
+    for v in g3_variants:
         df[f"r_G3_{v}"] = df[f"L1L2_{v}_bytes"] / df.L2_direct_bytes
     df["r_L3_actual_vs_ideal"] = df.L3_bytes / df.L3_ideal_bytes
     clean = df[~df.lossy_source]
@@ -138,8 +139,8 @@ def main():
          f"{int(df.bound_violations_checker.sum())} bound violations)"),
         ("G2", "stabilized RMSE <= 0.32 (theory 0.289)", (clean.stab_rmse <= 0.32).all(),
          f"median {clean.stab_rmse.median():.3f}, max {clean.stab_rmse.max():.3f}"),
-        ("G2", "synthetic ground-truth ratio <= 1.05 (theory 1.041)", syn_gt[0] <= 1.05,
-         f"median {syn_gt[0]:.4f} [{syn_gt[1]:.4f}, {syn_gt[2]:.4f}]"),
+        ("G2", "synthetic ground-truth ratio <= 1.05 (theory 1.041)", syn_gt[0] <= 1.05 if syn is not None else None,
+         f"median {syn_gt[0]:.4f} [{syn_gt[1]:.4f}, {syn_gt[2]:.4f}]" if syn is not None else "not run for this set"),
         ("G2", "render-based checks (noise-equivalence, PSNR, Delta E)", None, "not run (deferred, see DEVIATIONS)"),
         ("G3", "neighbour overlap@10, zero-shot accuracy", None, "not run (CLIP deferred)"),
         ("G4", "1024x1024 crop reads only header, L1 and touched tiles", df.crop1024_reads_ok.all(),
@@ -229,13 +230,13 @@ def main():
 
     L.append("## 6. Other measurements\n")
     L.append("- G3 by L1 construction, (L1+L2)/L2 direct, linear sources (dev choice of construction and upsampler):")
-    for v in ["mean_bilinear", "mean_nearest", "wavelet_bilinear"]:
+    for v in g3_variants:
         m, lo, hi = boot_median_ci(clean[f"r_G3_{v}"])
         L.append(f"    - {v.replace('_bilinear', '').replace('_nearest', '').replace('mean', 'A (floor-mean)').replace('wavelet', 'B (5/3 wavelet)')}"
                  f"{', nearest upsampler' if 'nearest' in v else ''}: median {m:.3f} [{lo:.3f}, {hi:.3f}]")
     L.append("- G3 against base-layer size (construction A, bilinear; k from l1_min_side = %s):"
              % "/".join(str(int(x)) for x in sorted(clean.k.unique())))
-    for mult in (1, 2, 4):
+    for mult in [m for m in (1, 2, 4) if m == 1 or f"L1L2_mean_k{m}x_bytes" in clean]:
         if mult == 1:
             r3, l1 = clean.r_G3_mean_bilinear, clean.L1_bytes
         else:

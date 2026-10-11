@@ -3,6 +3,7 @@
 Resumable: images whose CSV exists are skipped.
 
     python -m bench.run --config configs/phase1.toml --split dev
+    python -m bench.run --dir data/personal_raws [--quick]     # any folder of raw files
 """
 import argparse
 import csv
@@ -60,13 +61,20 @@ def _signal_quality(raw, data, info, step, prefix):
     return row, sig
 
 
-def run_image(key, cfg, split):
+RAW_EXT = {".dng", ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".pef", ".srw", ".iiq", ".3fr", ".erf", ".kdc", ".mrw", ".x3f"}
+
+
+def run_image(key, cfg, split, path=None, quick=False):
     out = RESULTS / "per_image" / split / f"{key}.csv"
     if out.exists():
         return key, "skip"
     t0 = time.time()
-    path = path_for(key)
-    row = {"key": key, "camera": camera_of(key)}
+    if path is None:
+        path, camera = path_for(key), camera_of(key)
+    else:
+        from .eval import camera_name
+        path, camera = Path(path), camera_name(path)
+    row = {"key": key, "camera": camera}
     try:
         raw = io_raw.read(path)
     except io_raw.NotBayer as e:
@@ -145,7 +153,8 @@ def run_image(key, cfg, split):
     d_untiled, _ = codec.encode(raw, step=step, with_l3=False, models=models, **{**enc, "tile": None})
     s = _sizes(d_untiled)
     row["L1L2_untiled_bytes"] = s["L1"] + s["L2"]
-    for mode, ups in [("mean", "bilinear"), ("mean", "nearest"), ("wavelet", "bilinear")]:
+    variants = [("mean", "bilinear")] if quick else [("mean", "bilinear"), ("mean", "nearest"), ("wavelet", "bilinear")]
+    for mode, ups in variants:
         dv, _ = codec.encode(raw, step=step, with_l3=False, models=models,
                              **{**enc, "l1_mode": mode, "upsampler": ups})
         s = _sizes(dv)
@@ -154,7 +163,7 @@ def run_image(key, cfg, split):
     from miniraw import layers as _layers
     k0 = _layers.choose_k(raw.planes.shape[1:], cfg["l1_min_side"])
     row["k"] = k0
-    for mult in (2, 4):
+    for mult in (() if quick else (2, 4)):
         dv, _ = codec.encode(raw, step=step, with_l3=False, models=models,
                              **{**enc, "l1_mode": "mean", "k": k0 * mult})
         s = _sizes(dv)
@@ -250,9 +259,9 @@ def _write(path, rows):
 
 
 def _worker(args):
-    key, cfg, split = args
+    key, cfg, split, path, quick = args
     try:
-        return run_image(key, cfg, split)
+        return run_image(key, cfg, split, path, quick)
     except Exception:
         return key, "ERROR\n" + traceback.format_exc()
 
@@ -263,13 +272,22 @@ def main():
     ap.add_argument("--split", default="dev", choices=["dev", "test"])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--no-synth", action="store_true")
+    ap.add_argument("--dir", help="benchmark every raw file in this folder (results under its name)")
+    ap.add_argument("--quick", action="store_true", help="skip design-choice variants (L1 constructions, k sweep)")
+    ap.add_argument("--workers", type=int)
     a = ap.parse_args()
     cfg = tomllib.loads(Path(a.config).read_text())
-    keys = read_split(a.split)[: a.limit]
-    with Pool(cfg.get("workers", 4)) as pool:
-        for key, status in pool.imap_unordered(_worker, [(k, cfg, a.split) for k in keys]):
+    if a.dir:
+        files = sorted(p for p in Path(a.dir).iterdir() if p.suffix.lower() in RAW_EXT)[: a.limit]
+        split = Path(a.dir).name
+        jobs = [(p.stem, cfg, split, str(p), a.quick) for p in files]
+    else:
+        split = a.split
+        jobs = [(k, cfg, split, None, a.quick) for k in read_split(split)[: a.limit]]
+    with Pool(a.workers or cfg.get("workers", 4)) as pool:
+        for key, status in pool.imap_unordered(_worker, jobs):
             print(f"{key}: {status}", flush=True)
-    if not a.no_synth and a.split == "dev":
+    if not a.no_synth and not a.dir and a.split == "dev":
         run_synth(cfg, a.split)
 
 

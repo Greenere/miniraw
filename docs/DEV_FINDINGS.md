@@ -2,7 +2,18 @@
 
 Oct 10, 2026. These come from the dev split: 20 FiveK DNGs, one per camera model. The 14 linear-source images are used for the gates; 6 sources processed in camera are reported separately. Numbers come from `results/report.md`, and every departure from the spec is in `results/DEVIATIONS.md`. This is not the frozen test-split verdict.
 
-## Gates
+## Update after optimization (P3 packing, L1 short side of at least 128 px; D21, D22)
+
+| Gate | Result | Verdict |
+| --- | --- | --- |
+| G1 | 1.013 [1.006, 1.023] | Pass |
+| G2 | 0.444 [0.373, 0.501]; hot tier 2.78 bpp against 7.52 bpp native raw | Marginal pass |
+| G3 | 1.036 [1.013, 1.072]; 1.013 with a 64 px L1 | Marginal fail |
+| G4 | -0.4% | Pass |
+
+Packing and effort give only 1 to 1.5% on L2. At step 1.0, about 2.05 of L2's roughly 2.5 bpp is the entropy of quantized sensor noise. No lossless coder removes that, so the hot tier shrinks substantially only with a larger step, or by not coding the noise at all (Phase 2 noise resynthesis). A context-modelled L3 would save about 0.05 bpp (`bench/experiments/l3_context.py`).
+
+## Gates (first pass, spec settings)
 
 | Gate | Result | Verdict |
 | --- | --- | --- |

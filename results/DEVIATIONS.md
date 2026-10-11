@@ -66,7 +66,7 @@ That run is archived in `results/per_image/dev_specA/`. It used construction A, 
   | Effort 9 | -0.9% | -0.6% (at 4.9x encode time) |
 
   P3, a single 4-channel image per tile, is used for MiniRaw, B2 and B5 alike. The report also keeps B2 under P1 (`B2_P1_bytes`). Effort stays at 7.
-- **D22. Smaller base layer: L1 shorter side of at least 128 px instead of 256.** With the spec's rule, G3 failed (1.048). Halving the L1 resolution gave 1.025 [1.014, 1.031] on dev; L1 is then about 57 KB, with a shorter side still above a 224 px CLIP input for most sensors. The setting is `l1_min_side`.
+- **D22. Smaller base layer: L1 shorter side of at least 128 px instead of 256.** With the spec's rule, G3 failed (1.048). Halving the L1 resolution gave 1.025 [1.014, 1.031] under P1 packing. Under P3 it gives 1.036 [1.013, 1.072], because packing helps q coded directly more than the L1 residual. L1 is then about 57 KB, with a shorter side still above a 224 px CLIP input for most sensors. Halving again (L1 near 64 to 128 px, 18 KB) gives 1.013. That passes G3, but it is probably too small for a good embedding, so it is left as a product decision. The setting is `l1_min_side`.
 - **Measured, not adopted: a context-modelled L3** (`bench/experiments/l3_context.py`). The context is where the 3x3 mean of signal-mode neighbours falls relative to the pixel's bin. It lowers the ideal L3 cost by a median 0.050 bpp (0.22 bpp on the noise-reduced Leica D-LUX 3), about half of G1's overhead, before the cost of storing tables. That is under 1% of the file and touches only the cold tier, so it is deferred.
 
 ## Environment
