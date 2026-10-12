@@ -127,11 +127,17 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
                     mr, _ = codec.encode(raw, step=step, effort=effort, threads=threads,
                                          with_l3=cold != "drop", source={"file": p.name}, keep_original=True)
                     hdr = container.RangeReader(mr).header
+                    l3 = None
+                    if cold == "split":
+                        mr, l3 = container.strip(mr)
+                    if len(mr) >= len(data):
+                        # Raws already compressed lossily in camera can grow; the original is then smaller and exact.
+                        note = f"raw stored as-is (MiniRaw would be larger: {len(mr) / 1e6:.1f} MB)"
+                        raise _StoreAsIs
                     restorable = bool((hdr["source"].get("original") or {}).get("restorable"))
                     e.update(kind="raw", member=f"{rel}.mraw", mosaic_sha256=hdr["source"]["sha256"],
                              step=step, exact=cold != "drop", original_restorable=restorable)
-                    if cold == "split":
-                        mr, l3 = container.strip(mr)
+                    if l3 is not None:
                         zl3.writestr(_zipinfo(f"{rel}.mraw.l3", st.st_mtime, ".mraw"), l3)
                         e["l3_member"] = f"{rel}.mraw.l3"
                         total_l3 += len(l3)
@@ -141,6 +147,8 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
                     note = ("raw, original restorable byte for byte" if restorable else "raw, bit-exact sensor data") \
                         if cold == "keep" else ("raw, L3 split off" if cold == "split" else
                                                 "raw, near-lossless" + (" (original format kept)" if container_kept else ""))
+                except _StoreAsIs:
+                    pass
                 except io_raw.NotBayer as err:
                     note = f"raw stored as-is (not 2x2 Bayer: {err})"
                 except Exception as err:  # unreadable or unsupported raw: keep the original
@@ -178,12 +186,17 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
         tmp_l3.replace(l3_path)
     dt = time.perf_counter() - t0
     size = dst.stat().st_size
-    change = "" if not total_in else (f" ({(1 - size / total_in) * 100:.0f}% smaller)" if size <= total_in else
-                                      f" ({(size / total_in - 1) * 100:.0f}% larger: zip overhead on small files)")
+    pct = (size / total_in - 1) * 100 if total_in else 0
+    change = ("" if not total_in else " (about the same size)" if abs(pct) < 0.5 else
+              f" ({-pct:.0f}% smaller)" if pct < 0 else f" ({pct:.0f}% larger: zip overhead on small files)")
     log(f"\n{len(files)} files, {total_in / 1e6:.1f} MB -> {size / 1e6:.1f} MB{change} in {dt:.1f} s: {dst}")
     if cold == "split":
         log(f"cold layer (needed for bit-exact raws): {l3_path.stat().st_size / 1e6:.1f} MB -> {l3_path}")
     return manifest
+
+
+class _StoreAsIs(Exception):
+    """A raw whose MiniRaw form would not be smaller: bundle the original file."""
 
 
 class _Null:
@@ -194,8 +207,18 @@ class _Null:
         return False
 
 
+def _open_zip(path):
+    try:
+        return zipfile.ZipFile(path)
+    except zipfile.BadZipFile:
+        raise ValueError(f"{path}: not a zip file") from None
+
+
 def read_manifest(zf):
-    m = json.loads(zf.read(MANIFEST))
+    try:
+        m = json.loads(zf.read(MANIFEST))
+    except KeyError:
+        raise ValueError(f"{zf.filename}: not a MiniRaw bundle (it has no {MANIFEST})") from None
     if m.get("format") != FORMAT:
         raise ValueError(f"not a MiniRaw bundle (format {m.get('format')!r})")
     return m
@@ -235,7 +258,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, forc
         l3 = cand if cand.exists() else None
     stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0, "raw_original": 0, "raw_fallback": 0,
              "raw_near_lossless": 0, "identical": 0, "pixel_identical": 0, "developed": 0, "mraw": 0}
-    with zipfile.ZipFile(src) as zf, (zipfile.ZipFile(l3) if l3 else _Null()) as zl3:
+    with _open_zip(src) as zf, (_open_zip(l3) if l3 else _Null()) as zl3:
         m = read_manifest(zf)
         files = m["files"]
         if not force:
@@ -343,7 +366,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, forc
 
 
 def list_bundle(src, log=print):
-    with zipfile.ZipFile(src) as zf:
+    with _open_zip(src) as zf:
         m = read_manifest(zf)
         orig = sum(e["size"] for e in m["files"])
         log(f"{src}: {len(m['files'])} files, created {m['created']} by MiniRaw {m['miniraw']}, "

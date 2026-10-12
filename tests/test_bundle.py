@@ -137,3 +137,28 @@ def test_rejects_path_traversal(tmp_path):
                     '"kind": "file", "sha256": "", "mtime": 0, "size": 2}]}' % bundle.FORMAT)
     with pytest.raises(ValueError, match="unsafe path"):
         bundle.unbundle(bad, tmp_path / "out", log=lambda *a: None)
+
+
+@pytest.mark.parametrize("cold", ["keep", "split", "drop"])
+def test_raw_that_would_grow_is_stored_as_is(folder, tmp_path, monkeypatch, cold):
+    """Raws already compressed lossily in camera can grow as .mraw; the bundle then keeps the original file.
+
+    The padding below lands after the exact layer, so with --cold split the working copy in the main zip stays
+    small and the raw is still converted, as it should be.
+    """
+    src, _ = folder
+    real = codec.encode
+
+    def bloated(*a, **k):
+        data, info = real(*a, **k)
+        return data + bytes(len(data) * 20), info        # trailing bytes: still a readable container, but large
+    monkeypatch.setattr(bundle.codec, "encode", bloated)
+    out = tmp_path / "g.zip"
+    m = bundle.bundle(src, out, effort=3, cold=cold, log=lambda *a: None)
+    e = next(e for e in m["files"] if e["path"] == "IMG_0001.dng")
+    if cold == "split":
+        assert e["kind"] == "raw" and e["stored_size"] < e["size"]
+    else:
+        assert e["kind"] == "file" and e["stored_size"] == e["size"]
+    bundle.unbundle(out, tmp_path / "r", log=lambda *a: None)
+    assert _hash(tmp_path / "r" / "IMG_0001.dng") == _hash(src / "IMG_0001.dng")

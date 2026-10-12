@@ -21,6 +21,7 @@ First release on PyPI (`pip install miniraw`). The file format is unchanged: eve
   - No silent overwrites: `encode`, `decode`, `bundle`, `unbundle` and `split` refuse to replace an existing file unless given `--force`. `unbundle` checks every target first and writes nothing if any would be replaced. Before, decoding a stripped file to the original's name replaced the original raw with the near-lossless one.
   - Common mistakes print one line instead of a traceback: a missing input, a file that isn't a raw (or isn't a `.mraw`), a damaged `.mraw`. `MINIRAW_DEBUG=1` shows the traceback.
   - `--step` must be greater than 0; a negative step crashed and `nan` hung.
+  - Unbundling a zip that isn't a MiniRaw bundle, or a file that isn't a zip, says so. Errors about an output path name that path instead of the input file.
 - **Clearer CLI output.**
   - `encode` and `info` lead with a plain summary: the working copy's size and error bound, the exact layer's size and what it restores, and the thumbnail. `info` keeps the technical numbers under "Details".
   - `unbundle` reports how each file came back: identical (SHA-256 verified), identical pixels, identical sensor data as DNG, or near-lossless and why. Before, it counted every verified file as "verified against the original hashes", even a raw recreated as DNG.
@@ -29,8 +30,10 @@ First release on PyPI (`pip install miniraw`). The file format is unchanged: eve
   - A bundle larger than its input says "larger" instead of "-8100% smaller".
 - README: a Quick start for installing from GitHub and the four everyday commands.
 - **Windows:** reading a `.mraw` from disk used `os.pread`, which Windows lacks; it now falls back to locked seek-and-read.
+- **`bundle` never stores a raw larger than the original.** Raws already compressed lossily in the camera (Nikon D70/D80/D100 compressed NEF, Leica M8) can grow as `.mraw`, the M8 file 2.8x. When the bundle's copy would not be smaller, the original file is stored as-is (exact, and smaller). `encode` notes when its output is larger.
 - `pandas` moves to the `dev` extra: only the benchmarks use it.
 - Tests run on macOS, Linux and Windows (GitHub Actions); tagged releases publish to PyPI.
+- `bench/release_check.py`: drives an installed `miniraw` over real raw files and checks every output against LibRaw's reading of the original (restore, exact, error bound, split, step 2, images, bundles).
 
 ## v2.0.0 (2026-10-11)
 

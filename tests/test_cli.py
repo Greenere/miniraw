@@ -129,3 +129,16 @@ def test_unbundle_summary_says_how_each_file_came_back(shoot, tmp_path, capsys):
     assert "1 identical to the original" in out                     # notes.txt
     assert "near-lossless pixels (the bundle was made with --cold drop)" in out
     assert "verified against the original hashes" not in out
+
+
+def test_errors_name_the_right_file(shoot, tmp_path):
+    mr = tmp_path / "a.mraw"
+    cli.main(["encode", str(shoot / "IMG_0001.dng"), str(mr), "--effort", "3"])
+    msg = _fails(["decode", str(mr), str(tmp_path / "no" / "such" / "x.jpg")])
+    assert msg.startswith(f"miniraw decode: {tmp_path / 'no' / 'such' / 'x.jpg'}: ") and str(mr) not in msg
+    import zipfile
+    with zipfile.ZipFile(tmp_path / "plain.zip", "w") as zf:
+        zf.writestr("x.txt", "hi")
+    assert "not a MiniRaw bundle" in _fails(["unbundle", str(tmp_path / "plain.zip"), str(tmp_path / "r")])
+    assert "not a MiniRaw bundle" in _fails(["unbundle", str(tmp_path / "plain.zip"), "--list"])
+    assert "not a zip file" in _fails(["unbundle", str(shoot / "notes.txt"), str(tmp_path / "r")])

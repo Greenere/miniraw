@@ -111,7 +111,9 @@ def main(argv=None):
         expected = isinstance(err, (ValueError, OSError, io_raw.NotBayer)) or type(err).__module__.startswith("rawpy")
         msg = str(err) if expected else (f"unexpected {type(err).__name__}: {err} "
                                          "(please report it; MINIRAW_DEBUG=1 shows the traceback)")
-        if a.cmd in ("decode", "info", "strip", "split") and a.src not in msg:
+        if isinstance(err, OSError) and err.filename and err.strerror:   # name the path the OS complained about
+            msg = f"{str(err.filename).removesuffix('.part')}: {err.strerror}"
+        elif a.cmd in ("decode", "info", "strip", "split") and a.src not in msg:
             msg = f"{a.src}: {msg}"
         sys.exit(f"miniraw {a.cmd}: {msg}")
 
@@ -151,6 +153,9 @@ def _run(a):
         print(f"{a.src} ({_mb(Path(a.src).stat().st_size)}) -> {a.dst} ({_mb(len(data))}) "
               f"in {time.perf_counter() - t0:.1f} s")
         print("\n".join(_summary(data)))
+        if len(data) > Path(a.src).stat().st_size:
+            print("note: larger than the original. This raw was probably already compressed lossily in the camera, "
+                  "so there is little noise left to set aside; `bundle` stores such files as they are.")
     elif a.cmd == "decode":
         _decode(a)
     elif a.cmd == "bundle":
