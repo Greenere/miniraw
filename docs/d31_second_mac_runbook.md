@@ -1,5 +1,8 @@
 # D31 verification on a second Mac
 
+> **Done (October 11, 2026).** Run on the Mac that holds the FiveK images; every pass condition held. Results in
+> [results/p0_benchmark.md](../results/p0_benchmark.md), section 3, and the D31 entry in `results/DEVIATIONS.md`.
+
 D31 changes how `vst.forward_table` repairs bins that miss the error bound. D27 halved them; D31 trims their top
 edge and lets the leftover start the next bin. This runbook checks D31 on the FiveK splits, which are not stored on
 the main Mac. It covers 200 images (dev, test, holdout, holdout2), about 2 GB of downloads, and about an hour

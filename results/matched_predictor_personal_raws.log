@@ -1,0 +1,11 @@
+DSC02666: jxl_raw_P1 1.0060  jxl_raw_P3 1.0000  jxl_cross_P1 1.0031  jxl_cross_P3 1.0039  miniraw_L1L2L3 0.9758  miniraw_L2 0.4031  miniraw_L3 0.5727 exact True
+DSC03179: jxl_raw_P1 1.0076  jxl_raw_P3 1.0000  jxl_cross_P1 0.9959  jxl_cross_P3 0.9966  miniraw_L1L2L3 0.9693  miniraw_L2 0.4229  miniraw_L3 0.5464 exact True
+DSC03393: jxl_raw_P1 1.0006  jxl_raw_P3 1.0000  jxl_cross_P1 1.0143  jxl_cross_P3 1.0147  miniraw_L1L2L3 0.9865  miniraw_L2 0.2762  miniraw_L3 0.7103 exact True
+DSC04227: jxl_raw_P1 1.0150  jxl_raw_P3 1.0000  jxl_cross_P1 0.9845  jxl_cross_P3 0.9853  miniraw_L1L2L3 0.9524  miniraw_L2 0.3952  miniraw_L3 0.5572 exact True
+DSC04475: jxl_raw_P1 1.0090  jxl_raw_P3 1.0000  jxl_cross_P1 0.9963  jxl_cross_P3 0.9974  miniraw_L1L2L3 0.9644  miniraw_L2 0.4534  miniraw_L3 0.5109 exact True
+DSC04565: jxl_raw_P1 1.0018  jxl_raw_P3 1.0000  jxl_cross_P1 1.0139  jxl_cross_P3 1.0130  miniraw_L1L2L3 0.9956  miniraw_L2 0.3928  miniraw_L3 0.6028 exact True
+DSC04574: jxl_raw_P1 1.0031  jxl_raw_P3 1.0000  jxl_cross_P1 1.0094  jxl_cross_P3 1.0087  miniraw_L1L2L3 0.9889  miniraw_L2 0.4225  miniraw_L3 0.5664 exact True
+DSC04659: jxl_raw_P1 1.0071  jxl_raw_P3 1.0000  jxl_cross_P1 0.9985  jxl_cross_P3 0.9984  miniraw_L1L2L3 0.9701  miniraw_L2 0.4328  miniraw_L3 0.5373 exact True
+DSC04664: jxl_raw_P1 1.0055  jxl_raw_P3 1.0000  jxl_cross_P1 1.0028  jxl_cross_P3 1.0023  miniraw_L1L2L3 0.9768  miniraw_L2 0.3940  miniraw_L3 0.5828 exact True
+DSC04818: jxl_raw_P1 1.0058  jxl_raw_P3 1.0000  jxl_cross_P1 0.9984  jxl_cross_P3 0.9987  miniraw_L1L2L3 0.9699  miniraw_L2 0.4267  miniraw_L3 0.5431 exact True
+wrote /Users/greenli/repos/miniraw/results/experiments/matched_predictor_personal_raws.csv

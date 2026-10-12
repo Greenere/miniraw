@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **D31: bins that miss the error bound are trimmed instead of halved.**
+  - Steps 0.5 and 1.0 are byte-identical on all 210 benchmark images.
+  - At steps 1.5 and 2.0, 14 images get smaller (up to 31%), with 0 pixels outside the bound.
+  - No image's hot tier grows from step 1.5 to 2.0 any more (4 did).
+- **Prior-art baselines (v3 P0), `results/p0_benchmark.md`, on 10 Sony A7 IV and 37 FiveK images:**
+  - JPEG XL given MiniRaw's cross-plane predictor gains nothing: MiniRaw's lossless total stays 1.0-2.5% under the best JPEG XL variant.
+  - A calibrated square-root quantizer is 0.1-0.5% smaller at the same step with equal average error. MiniRaw's reconstruction bias is lower: 0.017 against 0.068 (A7 IV), 0.063 against 0.093 (FiveK).
+  - Worst-case error is unresolved: it depends on whose noise model is the reference.
+  - New: `bench/experiments/calibrated_sqrt.py`, `matched_predictor.py` and `d31_check.py`.
+- **Claims tightened (README, METHOD):** the error bound is described as relative to MiniRaw's estimated noise model, and the calibrated baseline is cited. The README charts are regenerated from the D31 runs.
 ## v2.0.0 (2026-10-11)
 
 File format version 2: smaller, and searchable. **Format promise:** files written by v1.0.0 and by v2.0.0 with

@@ -48,6 +48,17 @@ Every departure from the spec, with the reason. Numbered for reference from code
   - **The 0.02 gate still fails on real images,** though `csafe` meets it on smooth synthetic scenes (median 0.016). The remainder comes from uneven pixel density inside bins, which the bound keeps reconstruction from following.
   - **Cost.** The median worst pixel rises about 0.015σ.
 
+- **D31. Bins that miss the error bound are trimmed, not halved (replaces D27's repair).** D27 halved every bin whose middle DN missed the bound. On a dark high-ISO frame (Sony A7 IV DSC03393), six bins hold 97% of the pixels at step 2.0 and each missed by 0.002-0.024σ; halving them made the hot tier larger at step 2.0 than at 1.5. `vst.forward_table` now trims each failing bin at the top until its middle DN passes, and the leftover starts the next bin. It is encoder-only, since the decoder reads just the bin starts.
+  - **Tables** (`bench/experiments/d31_check.py tables`; 210 images: dev, test, holdout, holdout2 and the 10 A7 IV files):
+    - Steps 0.5 and 1.0 are unchanged on all 840 planes.
+    - At step 1.5, 15 planes in 5 images change (3,474 to 3,249 bins); at step 2.0, 45 planes in 14 images (12,726 to 12,071 bins).
+    - Every change has fewer bins, and 0 pixels are outside the bound.
+  - **Benchmarks** (format 2 re-runs `holdout_v2_d31`, `holdout2_v2_d31` and `personal_raws_v2_d31` against the stored D27 results):
+    - No image changes at steps 0.5 or 1.0.
+    - At steps 1.5 and 2.0, 11 image-steps change, all smaller: new/old 0.689-0.926.
+    - 0 pixels are outside the bound.
+    - The images whose hot tier grew from step 1.5 to 2.0 go from 4 to 0.
+  - **Full report:** `results/p0_benchmark.md`, section 3.
 ## Data (spec 7)
 
 - **D6. Dev split is FiveK only: 20 images, one per camera for the 20 most common models, seed 0.** RAISE downloads require a registration form with name, affiliation and email, plus acceptance of non-commercial terms. That is an owner action, and the legal question in spec 7 is still open. RawNIND has not been downloaded yet. `bench/splits/test.txt` holds 60 FiveK images from the same 20 cameras; it has not been run.

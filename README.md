@@ -1,7 +1,8 @@
 # MiniRaw
 
-A layered file format for raw photos: a compact copy accurate to within the sensor's own noise, an optional layer
-that restores every sensor value bit for bit, and a built-in search thumbnail. Release v2.0, file format version 2
+A layered file format for raw photos: a compact working copy whose error at every pixel is bounded by a noise model
+measured from the image, an optional layer that restores every sensor value bit for bit, and a built-in search
+thumbnail. Release v2.0, file format version 2
 (the v1.0 README is archived in [docs/readme_v1.md](docs/readme_v1.md)).
 
 A raw photo is mostly noise, and noise doesn't compress. MiniRaw measures each image's noise, keeps the part of every
@@ -32,7 +33,7 @@ Measured on 60 MIT-Adobe FiveK raw files never used to develop the codec (37 are
 | | MiniRaw format 2 |
 | --- | --- |
 | **Hot tier** | **0.37x the camera's raw file**, 0.42x JPEG XL lossless |
-| Worst pixel in the hot tier | 0.58x the sensor's own noise (no pixel outside the error bound) |
+| Worst pixel in the hot tier | 0.58x the modelled noise (no pixel outside the error bound) |
 | **Every layer, sensor-exact** | **0.88x the camera's file, 0.987x JPEG XL lossless** |
 | Exact decodes matching the original's hash | 60 of 60 |
 | Indexing a file | One 16 KB header read with a stored embedding; about 51 KB to re-index |
@@ -42,13 +43,16 @@ Measured on 60 MIT-Adobe FiveK raw files never used to develop the codec (37 are
   <img alt="Strip chart of size relative to the camera's raw file, one dot per image, for 37 held-out FiveK images from 14 cameras, MiniRaw format 2. JPEG XL lossless: median 0.89x, range 0.78 to 0.94. MiniRaw all layers, bit-exact: median 0.88x, range 0.77 to 0.94. MiniRaw hot tier at step 1.0: median 0.37x, range 0.27 to 0.50." src="docs/img/fivek_holdout2_v2_size_light.svg">
 </picture>
 
-**The error bound is per pixel.** The step sets the trade-off: in units of the noise at each pixel's brightness, no
-value moves more than half a step (plus one raw unit). Against a fixed square-root curve, the approach of in-camera
-lossy raw modes, MiniRaw is smaller at the same worst-case error and about equal at the same average error:
+**The error bound is per pixel, and relative to a model.** The step sets the trade-off: in units of the noise MiniRaw
+estimates at each pixel's brightness, no value moves more than half a step (plus one raw unit). The bound holds
+against that estimate, which can run high on textured, low-noise images; it is not an independently measured
+guarantee. Against a fixed square-root curve, the approach of in-camera lossy raw modes, MiniRaw is smaller at the
+same worst-case error and about equal at the same average error. A *calibrated* square-root quantizer, the
+established technique, matches MiniRaw's size and average error ([results/p0_benchmark.md](results/p0_benchmark.md)):
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_holdout2_v2_quality_dark.svg">
-  <img alt="Two line charts of error against median bits per pixel for 37 held-out FiveK images, MiniRaw format 2. Worst-case error: MiniRaw runs from 1.09 sigma at 1.82 bpp to 0.33 sigma at 3.60 bpp, with the default step 1.0 at 2.66 bpp and 0.58 sigma; the square-root curve runs from 2.73 sigma at 1.99 bpp to 0.15 sigma at 5.62 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_holdout2_v2_quality_light.svg">
+  <img alt="Two line charts of error against median bits per pixel for 37 held-out FiveK images, MiniRaw format 2. Worst-case error: MiniRaw runs from 1.09 sigma at 1.81 bpp to 0.33 sigma at 3.60 bpp, with the default step 1.0 at 2.66 bpp and 0.58 sigma; the square-root curve runs from 2.73 sigma at 1.99 bpp to 0.15 sigma at 5.62 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_holdout2_v2_quality_light.svg">
 </picture>
 
 **Search.** On 493 more unseen FiveK images, embeddings of the `IDX` thumbnail match those of a full-resolution
@@ -68,7 +72,7 @@ without it, and `IDX` replaces it for preview and search. Details: [results/v2_b
 used while developing the codec, so treat them as a tuning set, not held-out evidence.
 
 - **Hot tier: 11.6 MB per photo, 72% smaller than the 41.2 MB ARW**, including the 33 KB index thumbnail. The median
-  worst pixel is 0.69x the sensor's noise at that brightness, and no pixel leaves the bound. The per-decile bias
+  worst pixel is 0.69x the modelled noise at that brightness, and no pixel leaves the bound. The per-decile bias
   check passes on this camera (0.017 against a 0.02 limit).
 - **Every layer: 27.6 MB, sensor-exact**, 33% smaller than the ARW and 2.5% smaller than JPEG XL lossless (28.3 MB).
 - **File-exact: 30.3 MB, 26% smaller than the ARW.** This restores the original ARW byte for byte, verified on all
@@ -80,15 +84,17 @@ used while developing the codec, so treat them as a tuning set, not held-out evi
   <img alt="Bar chart of median size per photo for 10 Sony A7 IV files, MiniRaw format 2. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.6 MB (bit-exact); MiniRaw hot tier 11.6 MB at step 1.0 and 9.4 MB at step 1.5." src="docs/img/a7iv_v2_size_light.svg">
 </picture>
 
-**Size against error.** Error is in units of the sensor's own noise at each pixel's brightness, so 1 sigma is "as
-large as the noise already in the photo".
+**Size against error.** Error is in units of the noise model's sigma at each pixel's brightness, estimated from the
+image, so 1 sigma is roughly "as large as the noise already in the photo".
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_quality_dark.svg">
-  <img alt="Two line charts of error against median size per photo for 10 Sony A7 IV files. Worst-case error: MiniRaw runs from 1.15 sigma at 8.3 MB to 0.43 sigma at 15.5 MB; the fixed square-root curve needs 18.7 MB to reach 1.1 sigma and is at 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20 percent below the square-root curve at the same size; JPEG XL lossy is higher." src="docs/img/a7iv_v2_quality_light.svg">
+  <img alt="Two line charts of error against median size per photo for 10 Sony A7 IV files. Worst-case error: MiniRaw runs from 1.15 sigma at 8.1 MB to 0.43 sigma at 15.5 MB; the fixed square-root curve needs 18.7 MB to reach 1.1 sigma and is at 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20 percent below the square-root curve at the same size; JPEG XL lossy is higher." src="docs/img/a7iv_v2_quality_light.svg">
 </picture>
 
-- **Worst-case error is where MiniRaw differs.** It fits the noise for each sensor and brightness:
+- **Worst-case error is where MiniRaw differs from a fixed curve.** It fits the noise for each sensor and brightness.
+  A calibrated curve closes most of this gap; see [results/p0_benchmark.md](results/p0_benchmark.md).
+  On these files:
   - At 9.4 MB (step 1.5), no pixel errs by more than 0.92 sigma.
   - At a similar 10.8 MB, a fixed square-root curve reaches 5.0 sigma, in the shadows and highlights where the
     curve doesn't match the sensor.
@@ -115,7 +121,7 @@ large as the noise already in the photo".
   excluded. Tiled codecs encode the four Bayer planes in 512-pixel tiles on 8 threads, as MiniRaw does. ZIP is
   single-threaded, as zip tools are.
 
-Data: `results/per_image/personal_raws_v2/`, `results/experiments/speed_personal_raws_v2.csv` and
+Data: `results/per_image/personal_raws_v2_d31/` (charts; current code, D31), `results/experiments/speed_personal_raws_v2.csv` and
 `file_exact_personal_raws_v2.csv`. The format 1 charts for the same files are in
 [docs/readme_v1.md](docs/readme_v1.md).
 
@@ -124,6 +130,9 @@ Data: `results/per_image/personal_raws_v2/`, `results/experiments/speed_personal
 - Byte-exact restore of the original file only for lossless-JPEG-tiled raws; everything else restores as DNG with
   bit-exact sensor data.
 - The held-out cameras are 2003-2009 models.
+- The error bound is relative to MiniRaw's own noise estimate, not to independently measured sensor noise.
+- A calibrated square-root quantizer is 0.1-0.5% smaller at the same step and equal in average error; MiniRaw's
+  measured advantages over it are lower bias and the layered format.
 - The spec's per-decile bias check (0.02σ) still fails on real images.
 - The noise estimate can run high on textured, low-noise images.
 
@@ -206,6 +215,7 @@ already discarded data, and the script warns when it detects that.
 | Document | What it covers |
 | --- | --- |
 | [results/v2_benchmark.md](results/v2_benchmark.md) | Format 2 against format 1 on fresh images; index results |
+| [results/p0_benchmark.md](results/p0_benchmark.md) | MiniRaw against calibrated companding and a predictor-matched JPEG XL; D31 verification |
 | [results/fivek_benchmark.md](results/fivek_benchmark.md) | Held-out FiveK benchmark of format 1, and the noise-model failures it found |
 | [results/index_benchmark.md](results/index_benchmark.md) | Whether the base layer can serve as a search index (it couldn't) |
 | [docs/METHOD.md](docs/METHOD.md) | How MiniRaw works, with the evidence for each part |

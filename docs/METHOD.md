@@ -19,7 +19,8 @@ MiniRaw splits each sensor value at the noise:
 - The part **within the noise** (where in its bin the value lies) goes into a separate **cold layer**.
 
 Together they restore every sensor value bit for bit. The hot tier alone decodes to an image where no pixel is off
-by more than a stated fraction of the sensor's own noise. The cold layer can move to cheaper storage or be dropped.
+by more than a stated fraction of the noise model's sigma (estimated from the image, so the bound is model-relative;
+see [p0_benchmark.md](../results/p0_benchmark.md)). The cold layer can move to cheaper storage or be dropped.
 
 ```mermaid
 flowchart LR
