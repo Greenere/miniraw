@@ -12,6 +12,20 @@
   - Worst-case error is unresolved: it depends on whose noise model is the reference.
   - New: `bench/experiments/calibrated_sqrt.py`, `matched_predictor.py` and `d31_check.py`.
 - **Claims tightened (README, METHOD):** the error bound is described as relative to MiniRaw's estimated noise model, and the calibrated baseline is cited. The README charts are regenerated from the D31 runs.
+- **CLI safety and errors.**
+  - `unbundle` into a relative folder (`unbundle trip.zip restored/`, as in the README) no longer crashes after the first file.
+  - No silent overwrites: `encode`, `decode`, `bundle`, `unbundle` and `split` refuse to replace an existing file unless given `--force`. `unbundle` checks every target first and writes nothing if any would be replaced. Before, decoding a stripped file to the original's name replaced the original raw with the near-lossless one.
+  - Common mistakes print one line instead of a traceback: a missing input, a file that isn't a raw (or isn't a `.mraw`), a damaged `.mraw`. `MINIRAW_DEBUG=1` shows the traceback.
+  - `--step` must be greater than 0; a negative step crashed and `nan` hung.
+- **Clearer CLI output.**
+  - `encode` and `info` lead with a plain summary: the working copy's size and error bound, the exact layer's size and what it restores, and the thumbnail. `info` keeps the technical numbers under "Details".
+  - `unbundle` reports how each file came back: identical (SHA-256 verified), identical pixels, identical sensor data as DNG, or near-lossless and why. Before, it counted every verified file as "verified against the original hashes", even a raw recreated as DNG.
+  - `strip` and `split` say what moved where, and refuse a file that has no exact layer left; `split` wrote an empty sidecar before.
+  - Every command and the options `--step` and `--no-l3` have help text. `miniraw --version`.
+  - A bundle larger than its input says "larger" instead of "-8100% smaller".
+- README: a Quick start for installing from GitHub and the four everyday commands.
+- `pandas` moves to the `dev` extra: only the benchmarks use it.
+
 ## v2.0.0 (2026-10-11)
 
 File format version 2: smaller, and searchable. **Format promise:** files written by v1.0.0 and by v2.0.0 with

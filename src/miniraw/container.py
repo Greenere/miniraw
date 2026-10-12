@@ -137,6 +137,8 @@ class RangeReader:
 
     def _parse(self):
         head = self.read(0, FIRST_READ)
+        if len(head) < PREAMBLE.size:
+            raise ValueError("not a .mraw file")
         magic, ver, self.flags, hlen, crc = PREAMBLE.unpack_from(head)
         if magic != MAGIC:
             raise ValueError("not a .mraw file")
@@ -147,7 +149,7 @@ class RangeReader:
             head = head + self.read(len(head), PREAMBLE.size + hlen - len(head))
         hb = head[PREAMBLE.size:PREAMBLE.size + hlen]
         if zlib.crc32(hb) != crc:
-            raise ValueError("header CRC mismatch")
+            raise ValueError("the file is damaged or truncated (header CRC mismatch)")
         self.header = msgpack.unpackb(zstandard.ZstdDecompressor().decompress(hb), raw=False,
                                       strict_map_key=False)
         self.sections = {tuple(s[:4]): s[4:] for s in self.header["sections"]}
@@ -167,7 +169,7 @@ class RangeReader:
         else:
             data = self.read(off, length)
         if zlib.crc32(data) != crc:
-            raise ValueError(f"CRC mismatch in section {layer} {plane} {ty} {tx}")
+            raise ValueError(f"the file is damaged or truncated (CRC mismatch in section {layer} {plane} {ty} {tx})")
         return data
 
     @property

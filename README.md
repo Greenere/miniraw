@@ -25,6 +25,22 @@ Decode modes:
 
 `signal` and `exact` also decode a rectangle, reading only the tiles it touches.
 
+## Quick start
+
+Needs Python 3.11 or newer and a raw format LibRaw reads (Sony ARW, Nikon NEF, Canon CR2, DNG and most others).
+
+```sh
+python3 -m pip install git+https://github.com/Greenere/miniraw
+
+miniraw encode DSC0001.ARW DSC0001.mraw         # one photo: prints what was kept and how big each part is
+miniraw decode DSC0001.mraw restored.ARW        # the original file back, byte for byte
+miniraw bundle ~/Photos/trip trip.zip --cold drop    # a whole folder, near-lossless raws, smallest
+miniraw unbundle trip.zip trip-restored/        # on the other end: ordinary raw files again
+```
+
+Commands never replace an existing file unless given `--force`. `miniraw COMMAND --help` lists the options, and
+`miniraw info FILE.mraw` shows what a file holds.
+
 ## Results
 
 Measured on 60 MIT-Adobe FiveK raw files never used to develop the codec (37 are linear raw, from 14 cameras of
@@ -138,10 +154,10 @@ Data: `results/per_image/personal_raws_v2_d31/` (charts; current code, D31), `re
 
 Details in [docs/METHOD.md](docs/METHOD.md#13-limitations-and-open-problems).
 
-## Setup
+## Setup for development
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'    # dev adds pytest, matplotlib and pandas (benchmarks)
 .venv/bin/pip install -e '.[index]'      # optional: search embeddings (OpenCLIP, PyTorch)
 .venv/bin/python -m pytest
 ```

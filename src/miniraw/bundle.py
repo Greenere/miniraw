@@ -95,13 +95,20 @@ def _repack_png(data):
     return None
 
 
-def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=None, log=print, png="store"):
-    """Bundle folder `src` into zip `dst`. cold: keep | split (L3 to <dst>.l3.zip) | drop."""
+def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=None, log=print, png="store",
+           force=False):
+    """Bundle folder `src` into zip `dst`. cold: keep | split (L3 to <dst>.l3.zip) | drop.
+
+    Refuses to replace an existing `dst` (or its .l3.zip) unless force.
+    """
     src, dst = Path(src), Path(dst)
     if not src.is_dir():
-        raise NotADirectoryError(src)
+        raise NotADirectoryError(f"{src}: not a folder")
     files = [p for p in _walk(src) if p.resolve() != dst.resolve()]
     l3_path = dst.with_name(dst.name[:-4] + ".l3.zip" if dst.name.endswith(".zip") else dst.name + ".l3.zip")
+    for out in (dst, l3_path) if cold == "split" else (dst,):
+        if out.exists() and not force:
+            raise FileExistsError(f"{out} already exists; pass --force to replace it")
     tmp, tmp_l3 = dst.with_name(dst.name + ".part"), l3_path.with_name(l3_path.name + ".part")
     entries, t0 = [], time.perf_counter()
     total_in = total_out = total_l3 = 0
@@ -171,8 +178,9 @@ def bundle(src, dst, step=1.0, effort=4, cold="keep", jpeg="repack", threads=Non
         tmp_l3.replace(l3_path)
     dt = time.perf_counter() - t0
     size = dst.stat().st_size
-    log(f"\n{len(files)} files, {total_in / 1e6:.1f} MB -> {size / 1e6:.1f} MB "
-        f"({(1 - size / max(total_in, 1)) * 100:.0f}% smaller) in {dt:.1f} s: {dst}")
+    change = "" if not total_in else (f" ({(1 - size / total_in) * 100:.0f}% smaller)" if size <= total_in else
+                                      f" ({(size / total_in - 1) * 100:.0f}% larger: zip overhead on small files)")
+    log(f"\n{len(files)} files, {total_in / 1e6:.1f} MB -> {size / 1e6:.1f} MB{change} in {dt:.1f} s: {dst}")
     if cold == "split":
         log(f"cold layer (needed for bit-exact raws): {l3_path.stat().st_size / 1e6:.1f} MB -> {l3_path}")
     return manifest
@@ -200,24 +208,41 @@ def _safe_target(root, rel):
     return target
 
 
-def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **develop):
+def _expected_path(e, raw_as):
+    """Where unbundle writes entry e (before sibling de-duplication)."""
+    rel = PurePosixPath(e["path"])
+    if e["kind"] != "raw" or (raw_as == "original" and e.get("container")):
+        return rel
+    if raw_as == "mraw":
+        return rel.with_name(rel.name + ".mraw")
+    return rel.with_suffix("." + ("dng" if raw_as == "original" else raw_as))
+
+
+def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, force=False, **develop):
     """Extract bundle `src` into folder `dst`. raw_as: original | dng | jpg | png | tif | mraw.
 
     "original" restores raw files byte for byte where the bundle kept their container, and
     falls back to DNG (bit-exact sensor data, or near-lossless without L3) otherwise.
 
     l3: the split-off <bundle>.l3.zip (looked up next to the bundle when not given).
+    Refuses to write over existing files unless force; nothing is written if any would be replaced.
     """
     src, dst = Path(src), Path(dst)
+    root = dst.resolve()
     t0 = time.perf_counter()
     if l3 is None:
         cand = src.with_name(src.name[:-4] + ".l3.zip" if src.name.endswith(".zip") else src.name + ".l3.zip")
         l3 = cand if cand.exists() else None
     stats = {"files": 0, "verified": 0, "raw_exact": 0, "raw_signal": 0, "raw_original": 0, "raw_fallback": 0,
-             "raw_near_lossless": 0}
+             "raw_near_lossless": 0, "identical": 0, "pixel_identical": 0, "developed": 0, "mraw": 0}
     with zipfile.ZipFile(src) as zf, (zipfile.ZipFile(l3) if l3 else _Null()) as zl3:
         m = read_manifest(zf)
         files = m["files"]
+        if not force:
+            clash = [str(t) for t in (_expected_path(e, raw_as) for e in files) if (root / t).exists()]
+            if clash:
+                raise FileExistsError(f"{len(clash)} file(s) would be replaced in {dst}, e.g. {clash[0]}; "
+                                      "unbundle into an empty folder, or pass --force to overwrite")
         for i, e in enumerate(files, 1):
             rel = PurePosixPath(e["path"])
             out = _safe_target(dst, rel)
@@ -235,6 +260,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                     out.write_bytes(blob)
                     stats["verified"] += 1
                     stats["raw_original"] += 1
+                    stats["identical"] += 1
                     note = "original, byte-identical"
                 elif raw_as == "original" and reader.has_container:
                     blob, _ = codec.Decoder(reader, threads).near_lossless_original()
@@ -246,6 +272,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                     out.write_bytes(payload)
                     if sidecar:
                         out.with_name(out.name + ".l3").write_bytes(sidecar)
+                    stats["mraw"] += 1
                     note = "mraw"
                 else:
                     fmt = "dng" if raw_as == "original" else raw_as
@@ -268,6 +295,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                     else:
                         rgb = export.develop(mosaic, reader.header, **develop)
                         export.save_image(out, rgb, reader.header)
+                        stats["developed"] += 1
                     stats["raw_exact" if mode == "exact" else "raw_signal"] += 1
                     note = ("DNG, bit-exact sensor data" if mode == "exact" else
                             "DNG, near-lossless (no L3)" if fmt == "dng" else f"developed {fmt.upper()}")
@@ -279,6 +307,7 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                 if _pixel_sha(px) != e["pixel_sha256"]:
                     raise ValueError(f"{rel}: restored pixels do not match the original PNG")
                 stats["verified"] += 1
+                stats["pixel_identical"] += 1
                 out.write_bytes(imagecodecs.png_encode(px))
                 note = "PNG, pixel-identical"
             else:
@@ -288,21 +317,28 @@ def unbundle(src, dst, raw_as="original", l3=None, threads=None, log=print, **de
                 if _sha256(payload) != e["sha256"]:
                     raise ValueError(f"{rel}: restored bytes do not match the original's SHA-256")
                 stats["verified"] += 1
+                stats["identical"] += 1
                 out.write_bytes(payload)
                 note = "byte-identical"
             os.utime(out, (e["mtime"], e["mtime"]))
             stats["files"] += 1
-            log(f"[{i}/{len(files)}] {out.relative_to(dst)}  ({note})")
-    log(f"\n{stats['files']} files restored to {dst} in {time.perf_counter() - t0:.1f} s; "
-        f"{stats['verified']} verified against the original hashes")
-    if stats["raw_original"]:
-        log(f"{stats['raw_original']} raw file(s) restored byte for byte")
-    if stats["raw_near_lossless"]:
-        log(f"{stats['raw_near_lossless']} raw file(s) written in their original format with near-lossless pixels "
-            "(L3 not available: bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")
-    if stats["raw_signal"] and raw_as in ("dng", "original"):
-        log(f"note: {stats['raw_signal']} raw file(s) restored near-lossless because their L3 layer is missing "
-            f"(bundled with --cold drop, or the .l3.zip was not found; pass --l3 FILE)")
+            log(f"[{i}/{len(files)}] {out.relative_to(root)}  ({note})")
+    lost = ("the bundle was made with --cold drop" if m["settings"].get("cold") == "drop" else
+            "its .l3.zip was not found; pass --l3 FILE")
+    exact_dng = stats["raw_exact"]                               # exact mode is used for DNG output only
+    near_dng = stats["raw_signal"] - stats["developed"]
+    lines = [(stats["identical"], "identical to the original (SHA-256 verified)"),
+             (stats["pixel_identical"], "PNG with identical pixels (file bytes differ: repacked)"),
+             (exact_dng, "raw recreated as DNG with identical sensor data (verified; the original file itself "
+                         "was not restorable)" if raw_as == "original" else "DNG with identical sensor data (verified)"),
+             (stats["raw_near_lossless"], f"raw in its original format with near-lossless pixels ({lost})"),
+             (near_dng, f"raw as DNG with near-lossless pixels ({lost})"),
+             (stats["developed"], f"raw developed to {raw_as.upper()}"),
+             (stats["mraw"], "raw kept as .mraw")]
+    log(f"\n{stats['files']} files restored to {dst} in {time.perf_counter() - t0:.1f} s:")
+    for n, what in lines:
+        if n:
+            log(f"  {n} {what}")
     return stats
 
 

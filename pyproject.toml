@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
   "numpy", "scipy", "rawpy", "imagecodecs", "constriction", "zstandard", "msgpack",
-  "tifffile", "pandas",
+  "tifffile",
 ]
 
 [project.urls]
@@ -30,7 +30,7 @@ Homepage = "https://github.com/Greenere/miniraw"
 Issues = "https://github.com/Greenere/miniraw/issues"
 
 [project.optional-dependencies]
-dev = ["pytest", "matplotlib"]
+dev = ["pytest", "matplotlib", "pandas"]     # pandas: bench/ only
 index = ["open_clip_torch", "torch", "transformers", "sentencepiece"]   # bench/experiments/index_eval.py
 
 [project.scripts]
