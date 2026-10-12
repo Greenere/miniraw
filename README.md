@@ -2,8 +2,8 @@
 
 A layered file format for raw photos: a compact working copy whose error at every pixel is bounded by a noise model
 measured from the image, an optional layer that restores every sensor value bit for bit, and a built-in search
-thumbnail. Release v2.0, file format version 2
-(the v1.0 README is archived in [docs/readme_v1.md](docs/readme_v1.md)).
+thumbnail. Release v2.1, file format version 2
+(the v1.0 README is archived in [docs/readme_v1.md](https://github.com/Greenere/miniraw/blob/main/docs/readme_v1.md)).
 
 A raw photo is mostly noise, and noise doesn't compress. MiniRaw measures each image's noise, keeps the part of every
 value that rises above it in a **hot tier**, and moves the rest into a **cold layer** that can live on cheaper
@@ -28,9 +28,11 @@ Decode modes:
 ## Quick start
 
 Needs Python 3.11 or newer and a raw format LibRaw reads (Sony ARW, Nikon NEF, Canon CR2, DNG and most others).
+Tested on macOS (Apple silicon), Linux and Windows. On Intel Macs and ARM Linux, pip has to build `rawpy` or
+`constriction` from source, which needs LibRaw or a Rust toolchain.
 
 ```sh
-python3 -m pip install git+https://github.com/Greenere/miniraw
+python3 -m pip install miniraw          # or the latest main: pip install git+https://github.com/Greenere/miniraw
 
 miniraw encode DSC0001.ARW DSC0001.mraw         # one photo: prints what was kept and how big each part is
 miniraw decode DSC0001.mraw restored.ARW        # the original file back, byte for byte
@@ -55,8 +57,8 @@ Measured on 60 MIT-Adobe FiveK raw files never used to develop the codec (37 are
 | Indexing a file | One 16 KB header read with a stored embedding; about 51 KB to re-index |
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_holdout2_v2_size_dark.svg">
-  <img alt="Strip chart of size relative to the camera's raw file, one dot per image, for 37 held-out FiveK images from 14 cameras, MiniRaw format 2. JPEG XL lossless: median 0.89x, range 0.78 to 0.94. MiniRaw all layers, bit-exact: median 0.88x, range 0.77 to 0.94. MiniRaw hot tier at step 1.0: median 0.37x, range 0.27 to 0.50." src="docs/img/fivek_holdout2_v2_size_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/fivek_holdout2_v2_size_dark.svg">
+  <img alt="Strip chart of size relative to the camera's raw file, one dot per image, for 37 held-out FiveK images from 14 cameras, MiniRaw format 2. JPEG XL lossless: median 0.89x, range 0.78 to 0.94. MiniRaw all layers, bit-exact: median 0.88x, range 0.77 to 0.94. MiniRaw hot tier at step 1.0: median 0.37x, range 0.27 to 0.50." src="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/fivek_holdout2_v2_size_light.svg">
 </picture>
 
 **The error bound is per pixel, and relative to a model.** The step sets the trade-off: in units of the noise MiniRaw
@@ -64,11 +66,11 @@ estimates at each pixel's brightness, no value moves more than half a step (plus
 against that estimate, which can run high on textured, low-noise images; it is not an independently measured
 guarantee. Against a fixed square-root curve, the approach of in-camera lossy raw modes, MiniRaw is smaller at the
 same worst-case error and about equal at the same average error. A *calibrated* square-root quantizer, the
-established technique, matches MiniRaw's size and average error ([results/p0_benchmark.md](results/p0_benchmark.md)):
+established technique, matches MiniRaw's size and average error ([results/p0_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/p0_benchmark.md)):
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fivek_holdout2_v2_quality_dark.svg">
-  <img alt="Two line charts of error against median bits per pixel for 37 held-out FiveK images, MiniRaw format 2. Worst-case error: MiniRaw runs from 1.09 sigma at 1.81 bpp to 0.33 sigma at 3.60 bpp, with the default step 1.0 at 2.66 bpp and 0.58 sigma; the square-root curve runs from 2.73 sigma at 1.99 bpp to 0.15 sigma at 5.62 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the curves nearly overlap, MiniRaw slightly lower." src="docs/img/fivek_holdout2_v2_quality_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/fivek_holdout2_v2_quality_dark.svg">
+  <img alt="Two line charts of error against median bits per pixel for 37 held-out FiveK images, MiniRaw format 2. Worst-case error: MiniRaw runs from 1.09 sigma at 1.81 bpp to 0.33 sigma at 3.60 bpp, with the default step 1.0 at 2.66 bpp and 0.58 sigma; the square-root curve runs from 2.73 sigma at 1.99 bpp to 0.15 sigma at 5.62 bpp and is above MiniRaw at every size MiniRaw covers. Average error: the curves nearly overlap, MiniRaw slightly lower." src="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/fivek_holdout2_v2_quality_light.svg">
 </picture>
 
 **Search.** On 493 more unseen FiveK images, embeddings of the `IDX` thumbnail match those of a full-resolution
@@ -80,7 +82,7 @@ render closely:
 
 **What format 2 changed** (against format 1 on the same 60 images): hot tier -1.8%, lossless total -1.2%, and the
 reconstruction bias -38% with no bound violations. The format 1 base layer (L1) is gone, because L2 coded better
-without it, and `IDX` replaces it for preview and search. Details: [results/v2_benchmark.md](results/v2_benchmark.md).
+without it, and `IDX` replaces it for preview and search. Details: [results/v2_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/v2_benchmark.md).
 
 ### A modern camera: Sony A7 IV
 
@@ -96,20 +98,20 @@ used while developing the codec, so treat them as a tuning set, not held-out evi
 - **Against format 1** on the same files: hot tier -1.2%, every layer -0.7%, file-exact 30.9 to 30.3 MB.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_size_dark.svg">
-  <img alt="Bar chart of median size per photo for 10 Sony A7 IV files, MiniRaw format 2. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.6 MB (bit-exact); MiniRaw hot tier 11.6 MB at step 1.0 and 9.4 MB at step 1.5." src="docs/img/a7iv_v2_size_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_size_dark.svg">
+  <img alt="Bar chart of median size per photo for 10 Sony A7 IV files, MiniRaw format 2. Uncompressed 57.7 MB; ZIP 47.5 MB; Sony ARW lossless 41.2 MB; JPEG-LS lossless 28.7 MB; JPEG XL lossless 28.3 MB; MiniRaw all layers 27.6 MB (bit-exact); MiniRaw hot tier 11.6 MB at step 1.0 and 9.4 MB at step 1.5." src="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_size_light.svg">
 </picture>
 
 **Size against error.** Error is in units of the noise model's sigma at each pixel's brightness, estimated from the
 image, so 1 sigma is roughly "as large as the noise already in the photo".
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_quality_dark.svg">
-  <img alt="Two line charts of error against median size per photo for 10 Sony A7 IV files. Worst-case error: MiniRaw runs from 1.15 sigma at 8.1 MB to 0.43 sigma at 15.5 MB; the fixed square-root curve needs 18.7 MB to reach 1.1 sigma and is at 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20 percent below the square-root curve at the same size; JPEG XL lossy is higher." src="docs/img/a7iv_v2_quality_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_quality_dark.svg">
+  <img alt="Two line charts of error against median size per photo for 10 Sony A7 IV files. Worst-case error: MiniRaw runs from 1.15 sigma at 8.1 MB to 0.43 sigma at 15.5 MB; the fixed square-root curve needs 18.7 MB to reach 1.1 sigma and is at 5.0 sigma at 10.8 MB; JPEG XL lossy is above 10 sigma at every size. Average error: MiniRaw is about 20 percent below the square-root curve at the same size; JPEG XL lossy is higher." src="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_quality_light.svg">
 </picture>
 
 - **Worst-case error is where MiniRaw differs from a fixed curve.** It fits the noise for each sensor and brightness.
-  A calibrated curve closes most of this gap; see [results/p0_benchmark.md](results/p0_benchmark.md).
+  A calibrated curve closes most of this gap; see [results/p0_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/p0_benchmark.md).
   On these files:
   - At 9.4 MB (step 1.5), no pixel errs by more than 0.92 sigma.
   - At a similar 10.8 MB, a fixed square-root curve reaches 5.0 sigma, in the shadows and highlights where the
@@ -122,8 +124,8 @@ image, so 1 sigma is roughly "as large as the noise already in the photo".
 **Encode speed.**
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/a7iv_v2_speed_dark.svg">
-  <img alt="Two scatter charts of encode time against size for 10 Sony A7 IV files on an Apple M4 Pro. Lossless: JPEG-LS 28.8 MB in 0.07 s; JPEG XL effort 4 29.2 MB in 0.30 s; MiniRaw effort 4 28.0 MB in 0.82 s; MiniRaw effort 7 27.6 MB in 1.4 s; JPEG XL effort 7 28.3 MB in 1.5 s; ZIP 47.5 MB in 1.7 s. Near-lossless and lossy: MiniRaw hot tier 11.9 MB in 0.72 s (effort 4) and 11.6 MB in 1.3 s (effort 7), worst pixel 0.7 sigma; square-root curve 10.8 MB in 1.1 s, worst 5.0 sigma; JPEG XL lossy 7.7 MB in 0.95 s, worst 12.8 sigma." src="docs/img/a7iv_v2_speed_light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_speed_dark.svg">
+  <img alt="Two scatter charts of encode time against size for 10 Sony A7 IV files on an Apple M4 Pro. Lossless: JPEG-LS 28.8 MB in 0.07 s; JPEG XL effort 4 29.2 MB in 0.30 s; MiniRaw effort 4 28.0 MB in 0.82 s; MiniRaw effort 7 27.6 MB in 1.4 s; JPEG XL effort 7 28.3 MB in 1.5 s; ZIP 47.5 MB in 1.7 s. Near-lossless and lossy: MiniRaw hot tier 11.9 MB in 0.72 s (effort 4) and 11.6 MB in 1.3 s (effort 7), worst pixel 0.7 sigma; square-root curve 10.8 MB in 1.1 s, worst 5.0 sigma; JPEG XL lossy 7.7 MB in 0.95 s, worst 12.8 sigma." src="https://raw.githubusercontent.com/Greenere/miniraw/main/docs/img/a7iv_v2_speed_light.svg">
 </picture>
 
 - **Lossless.**
@@ -139,7 +141,7 @@ image, so 1 sigma is roughly "as large as the noise already in the photo".
 
 Data: `results/per_image/personal_raws_v2_d31/` (charts; current code, D31), `results/experiments/speed_personal_raws_v2.csv` and
 `file_exact_personal_raws_v2.csv`. The format 1 charts for the same files are in
-[docs/readme_v1.md](docs/readme_v1.md).
+[docs/readme_v1.md](https://github.com/Greenere/miniraw/blob/main/docs/readme_v1.md).
 
 **Limitations.**
 - 2x2 Bayer sensors only.
@@ -152,7 +154,7 @@ Data: `results/per_image/personal_raws_v2_d31/` (charts; current code, D31), `re
 - The spec's per-decile bias check (0.02σ) still fails on real images.
 - The noise estimate can run high on textured, low-noise images.
 
-Details in [docs/METHOD.md](docs/METHOD.md#13-limitations-and-open-problems).
+Details in [docs/METHOD.md](https://github.com/Greenere/miniraw/blob/main/docs/METHOD.md#13-limitations-and-open-problems).
 
 ## Setup for development
 
@@ -230,14 +232,14 @@ already discarded data, and the script warns when it detects that.
 
 | Document | What it covers |
 | --- | --- |
-| [results/v2_benchmark.md](results/v2_benchmark.md) | Format 2 against format 1 on fresh images; index results |
-| [results/p0_benchmark.md](results/p0_benchmark.md) | MiniRaw against calibrated companding and a predictor-matched JPEG XL; D31 verification |
-| [results/fivek_benchmark.md](results/fivek_benchmark.md) | Held-out FiveK benchmark of format 1, and the noise-model failures it found |
-| [results/index_benchmark.md](results/index_benchmark.md) | Whether the base layer can serve as a search index (it couldn't) |
-| [docs/METHOD.md](docs/METHOD.md) | How MiniRaw works, with the evidence for each part |
-| [docs/v2_advancement.md](docs/v2_advancement.md) | Plan for further compression and indexability |
-| [results/DEVIATIONS.md](results/DEVIATIONS.md) | Every departure from [SPEC.md](SPEC.md), numbered |
-| [CHANGELOG.md](CHANGELOG.md) | Changes by release |
+| [results/v2_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/v2_benchmark.md) | Format 2 against format 1 on fresh images; index results |
+| [results/p0_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/p0_benchmark.md) | MiniRaw against calibrated companding and a predictor-matched JPEG XL; D31 verification |
+| [results/fivek_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/fivek_benchmark.md) | Held-out FiveK benchmark of format 1, and the noise-model failures it found |
+| [results/index_benchmark.md](https://github.com/Greenere/miniraw/blob/main/results/index_benchmark.md) | Whether the base layer can serve as a search index (it couldn't) |
+| [docs/METHOD.md](https://github.com/Greenere/miniraw/blob/main/docs/METHOD.md) | How MiniRaw works, with the evidence for each part |
+| [docs/v2_advancement.md](https://github.com/Greenere/miniraw/blob/main/docs/v2_advancement.md) | Plan for further compression and indexability |
+| [results/DEVIATIONS.md](https://github.com/Greenere/miniraw/blob/main/results/DEVIATIONS.md) | Every departure from [SPEC.md](https://github.com/Greenere/miniraw/blob/main/SPEC.md), numbered |
+| [CHANGELOG.md](https://github.com/Greenere/miniraw/blob/main/CHANGELOG.md) | Changes by release |
 
 ```sh
 python -m bench.datasets --split dev                    # 20 FiveK DNGs (about 200 MB)

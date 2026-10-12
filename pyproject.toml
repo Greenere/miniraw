@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "miniraw"
-version = "2.0.0"
+version = "2.1.0"
 description = "Layered RAW photo codec: a noise-calibrated near-lossless hot tier plus an optional layer for bit-exact recovery"
 readme = "README.md"
 license = "MIT"
@@ -13,10 +13,20 @@ authors = [{ name = "Greenere" }]
 requires-python = ">=3.11"
 keywords = ["raw", "camera raw", "image compression", "codec", "dng", "jpeg-xl", "photography"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
   "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
   "Intended Audience :: Science/Research",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Multimedia :: Graphics",
   "Topic :: Multimedia :: Graphics :: Graphics Conversion",
   "Topic :: System :: Archiving :: Compression",
 ]
@@ -28,6 +38,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Greenere/miniraw"
 Issues = "https://github.com/Greenere/miniraw/issues"
+Changelog = "https://github.com/Greenere/miniraw/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Greenere/miniraw/blob/main/docs/METHOD.md"
 
 [project.optional-dependencies]
 dev = ["pytest", "matplotlib", "pandas"]     # pandas: bench/ only

@@ -109,3 +109,17 @@ def test_l1_variants_decode_exactly(synth_image, l1_step, g1_pred):
     assert np.array_equal(codec.decode(data, "exact"), orig)
     base, _ = codec.encode(synth_image, step=1.0, tile=256)
     assert np.array_equal(codec.decode(data, "signal"), codec.decode(base, "signal"))
+
+
+def test_file_reads_without_pread(synth_image, tmp_path, monkeypatch):
+    """Windows has no os.pread; reading from a path falls back to locked seek-and-read, also across threads."""
+    data, _ = codec.encode(synth_image, tile=256, effort=3)
+    path = tmp_path / "w.mraw"
+    path.write_bytes(data)
+    monkeypatch.delattr("os.pread")
+    reader = container.RangeReader(path)
+    assert reader._src._lock is not None
+    mosaic = io_raw.unpack(synth_image.planes, synth_image.offsets)
+    assert np.array_equal(codec.Decoder(reader, threads=8).mosaic("exact"), mosaic)
+    assert np.array_equal(codec.decode(path, "signal", region=(10, 20, 300, 200)),
+                          codec.decode(data, "signal", region=(10, 20, 300, 200)))

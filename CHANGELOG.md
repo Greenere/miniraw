@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v2.1.0 (2026-10-11)
+
+First release on PyPI (`pip install miniraw`). The file format is unchanged: every file decodes as before.
+
 - **D31: bins that miss the error bound are trimmed instead of halved.**
   - Steps 0.5 and 1.0 are byte-identical on all 210 benchmark images.
   - At steps 1.5 and 2.0, 14 images get smaller (up to 31%), with 0 pixels outside the bound.
@@ -24,7 +28,9 @@
   - Every command and the options `--step` and `--no-l3` have help text. `miniraw --version`.
   - A bundle larger than its input says "larger" instead of "-8100% smaller".
 - README: a Quick start for installing from GitHub and the four everyday commands.
+- **Windows:** reading a `.mraw` from disk used `os.pread`, which Windows lacks; it now falls back to locked seek-and-read.
 - `pandas` moves to the `dev` extra: only the benchmarks use it.
+- Tests run on macOS, Linux and Windows (GitHub Actions); tagged releases publish to PyPI.
 
 ## v2.0.0 (2026-10-11)
 

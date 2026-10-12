@@ -9,6 +9,7 @@ All offsets are absolute.
 """
 import os
 import struct
+import threading
 import zlib
 from pathlib import Path
 
@@ -64,18 +65,29 @@ class _Bytes:
 
 
 class _File:
-    """File backing store using positional reads (safe across concurrent tile jobs)."""
+    """File backing store using positional reads (safe across concurrent tile jobs).
+
+    Windows has no os.pread: there, reads seek and read under a lock instead.
+    """
 
     def __init__(self, path):
         self.path = str(path)
-        self.fd = os.open(self.path, os.O_RDONLY)
+        self.fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         self.size = os.fstat(self.fd).st_size
+        self._lock = None if hasattr(os, "pread") else threading.Lock()
+
+    def _pread(self, n, offset):
+        if self._lock is None:
+            return os.pread(self.fd, n, offset)
+        with self._lock:
+            os.lseek(self.fd, offset, os.SEEK_SET)
+            return os.read(self.fd, n)
 
     def read_at(self, offset, length):
         length = max(0, min(length, self.size - offset))
         parts, got = [], 0
         while got < length:
-            b = os.pread(self.fd, length - got, offset + got)
+            b = self._pread(length - got, offset + got)
             if not b:
                 break
             parts.append(b)
