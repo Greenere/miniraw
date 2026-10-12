@@ -99,7 +99,7 @@ def test_bound_holds_at_large_steps(step):
 
 def test_failing_bins_are_trimmed_not_halved():
     """D31: a bin that misses the bound is trimmed at the top, so the table keeps about as many bins as the
-    uniform one. Halving (D27) doubled the bins holding nearly every pixel of a dark ISO 12800 Sony A7 IV frame."""
+    uniform one. Halving (D27) doubled the bins holding nearly every pixel of a dark ISO 3200 Sony A7 IV frame."""
     model = {"type": "affine", "a": 10.66, "b": 512.0, "c": 0.0}
     T = vst.T_table(model, 16383)
 

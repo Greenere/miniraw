@@ -152,6 +152,79 @@ These are proposed decision rules, not results or guarantees of acceptance.
 
 Immediate next step: implement P0 comparisons and produce one matched rate–error table plus one predictor/decomposition ablation table. Use those results to choose the paper's thesis before expanding the format.
 
+## 10. After P0 (2026-10-11)
+
+### 10.1 Outcome
+
+[results/p0_benchmark.md](../results/p0_benchmark.md) answers both P0 questions. With calibration and prediction
+matched, no algorithmic advantage remains: a calibrated square-root quantizer is 0.1-0.5% smaller than MiniRaw at
+the same step, with the same average error. This is §9's "reassess the claim" case.
+
+| Claim | Status after P0 | Novelty |
+| --- | --- | --- |
+| Smaller hot tier at the same error | Gone against calibrated companding | None: Bernstein et al. [1] |
+| Lossless total 1.0-2.5% under JPEG XL | Real; from bin index plus range-coded in-bin position, not the predictor | Weak: lossy-plus-residual precedents [3, 4] |
+| Lower reconstruction bias | Real against two weak baselines (see 10.3, route 2) | Not yet shown |
+| Worst-case error | Unresolved: depends on whose noise model is the reference | Open (route 1) |
+| Layers, region reads, index | Engineering | System contribution |
+
+### 10.2 Why rate at the same guarantee is closed
+
+At step 1.0, about 2.05 of the hot tier's roughly 2.8 bits/pixel is the entropy of quantized sensor noise
+(0.5·log2(2πe) for bins one sigma wide; [DEV_FINDINGS.md](DEV_FINDINGS.md)). No coder removes it without
+breaking the per-pixel bound. A perfect signal model could save at most the remaining ~0.75 bits/pixel, and JPEG
+XL already captures much of it. A real improvement has to change the guarantee or the objective.
+
+### 10.3 Three routes
+
+| Route | What would be new | Gap |
+| --- | --- | --- |
+| 1. Guarantee against the true sensor noise | Error ≤ k·σ_true with stated confidence, from uncalibrated photos; for example the step chosen from a lower confidence limit on σ, or calibration pooled per camera and ISO across a library | No independent noise reference yet. First step: tripod pairs and dark frames on the A7 IV at about 4 ISOs. |
+| 2. Bias-controlled reconstruction within the bound | Near-zero bias under the bound at negligible rate | (a) The per-decile bias metric fails even for perfect per-bin centroids (DEV_FINDINGS); condition on the clean signal or the decoded value instead. (b) Compare against stronger baselines: per-bin empirical centroids, a bias-corrected inverse [1], stored reconstruction offsets. (c) Show it matters with a stacking or averaging experiment. |
+| 3. Noise resynthesis | A calibrated, non-learned working copy with regenerated noise, exactly recoverable from the cold tier. Prior work [6] and video film-grain synthesis can't recover the real noise. | Gives up the per-pixel bound to the observation; needs real-noise validation (route 1's data); see 10.4. |
+
+### 10.4 Route 3 feasibility
+
+`bench/experiments/noise_resynthesis.py`, run on 29 files (10 A7 IV, 19 FiveK dev; Leica M8 excluded, where the
+model falls back to lossless):
+- **Method:** a sliding-window 8x8 DCT denoiser in MiniRaw's transformed domain, on four 512 px crops per plane.
+- **Rate:** the denoised estimate quantized at 0.5σ and coded with JPEG XL lossless, against the current L2 on the
+  same crops.
+- **Detail loss:** ground truth from a 4x-downsampled clean scene with known noise added.
+- **Noise realism:** the real residual against a control with ideal model noise.
+
+| | Noisy frames (SNR at 18% < 33; n = 6) | Cleaner frames (n = 23) |
+| --- | --- | --- |
+| Typical ISO | 800-3200 | 100-400 |
+| Hot-tier saving at 0.5σ / 1.0σ (median) | 58% / 75% | 11% / 33% |
+| Error against the clean scene, flat / busy texture | 0.32 / 0.72σ | 0.52 / 0.98σ |
+
+- **High-ISO frames gain 2-4x** with the clean estimate well inside the noise, across four camera makes.
+- **Cleaner frames gain little.** In busy areas the denoiser can't separate texture from noise. On 6 files the
+  denoised estimate at 0.5σ costs more than the current hot tier.
+- **Library-level saving is about 21%** (18% on the A7 IV set) if each file uses whichever version is smaller.
+- **Noise realism.**
+  - Spread and lag-1 correlation match the model.
+  - Row banding is 20-40% above ideal on 7 files, mostly older Canons. Synthesis there needs a row-noise
+    component.
+- **Caveats.**
+  - A simple denoiser (BM3D-class methods should do better), crops only, and few noisy frames per camera.
+  - The ground-truth scenes are denser in texture than real photos.
+
+So route 3 is viable as an **adaptive high-ISO mode**, not as a general replacement. Its proof needs the same
+real-noise reference as route 1.
+
+### 10.5 Recommended order
+
+1. **Real-noise reference** (an afternoon of capture): A7 IV tripod pairs and dark frames at ISO 100-6400. It
+   settles the worst-case question and validates route 3's synthesis, including row noise.
+2. **Route 2 metric and baselines** (days), usable in either paper.
+3. **Route 3 as an adaptive mode**, if step 1 confirms the synthesis on real noise. That makes the most promising
+   algorithmic headline.
+
+Meanwhile, the paper available now is the systems paper (§5): layered, region-readable raw storage with honest
+model-relative bounds, a lossless total slightly under JPEG XL, and lower bias.
+
 ## References and inspected code
 
 1. Bernstein et al. (2010), *Noise and Bias in Square-Root Compression Schemes*. [Paper](https://arxiv.org/abs/0910.4571).
