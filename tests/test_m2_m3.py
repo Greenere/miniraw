@@ -116,7 +116,7 @@ def test_file_reads_without_pread(synth_image, tmp_path, monkeypatch):
     data, _ = codec.encode(synth_image, tile=256, effort=3)
     path = tmp_path / "w.mraw"
     path.write_bytes(data)
-    monkeypatch.delattr("os.pread")
+    monkeypatch.delattr("os.pread", raising=False)     # already absent on Windows
     reader = container.RangeReader(path)
     assert reader._src._lock is not None
     mosaic = io_raw.unpack(synth_image.planes, synth_image.offsets)
